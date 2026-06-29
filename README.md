@@ -774,3 +774,80 @@ Next step:
 ```text
 Build addon v0.1 with slash commands and SavedVariables logging.
 ```
+
+---
+
+## Local Development Quick Start
+
+### 1. Install the addon
+
+Copy the addon folder:
+
+```text
+addon/RingoWoWOps
+
+into your WoW Classic AddOns folder.
+
+Example Windows path:
+
+C:\Program Files (x86)\World of Warcraft\_classic_\Interface\AddOns\RingoWoWOps
+
+If your client uses a different folder for Anniversary/TBC Classic, place it under that client’s Interface/AddOns folder.
+
+2. Enable addon in-game
+
+On the character selection screen:
+
+Click AddOns
+Enable RingoWoWOps
+Enable Load out of date AddOns if needed
+3. Test commands in game
+/rwo status
+/rwo start
+/rwo activity questing
+/rwo snap
+/rwo note first test note
+/rwo stop
+
+After testing, run:
+
+/reload
+
+or log out to force SavedVariables to be written.
+
+4. Find SavedVariables
+
+Expected file path:
+
+World of Warcraft\_classic_\WTF\Account\<ACCOUNT_NAME>\SavedVariables\RingoWoWOps.lua
+
+Copy that file into:
+
+data/raw/RingoWoWOps.lua
+5. Parse SavedVariables to CSV
+
+Install parser dependency:
+
+pip install lupa
+
+Run:
+
+python tools/parse_savedvariables.py data/raw/RingoWoWOps.lua --out data/processed
+
+Expected outputs:
+
+data/processed/sessions.csv
+data/processed/snapshots.csv
+data/processed/notes.csv
+data/processed/activities.csv
+Current MVP Test Checklist
+ Addon appears in WoW AddOns list
+ /rwo status works
+ /rwo start starts a session
+ /rwo activity questing saves activity
+ /rwo snap saves a snapshot
+ /rwo note test saves a note
+ /rwo stop ends the session
+ SavedVariables file is created after /reload or logout
+ Python parser creates CSV files
+
