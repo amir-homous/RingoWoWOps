@@ -1,0 +1,10 @@
+{
+  "wow_path": "C:\\World of Warcraft",
+  "wow_flavor": "_anniversary_",
+  "account": "469948984#2",
+  "savedvariables_file": "RingoWoWOps.lua",
+  "raw_output": "data\\raw\\RingoWoWOps.lua",
+  "processed_dir": "data\\processed",
+  "sqlite_db": "data\\ringo_ops.sqlite",
+  "daily_report": "data\\processed\\daily_report.md"
+}
