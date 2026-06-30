@@ -95,6 +95,7 @@ def make_upload_zip(config: dict) -> None:
         processed_dir / "snapshots.csv",
         processed_dir / "notes.csv",
         processed_dir / "activities.csv",
+        processed_dir / "events.csv",
     ]
 
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:

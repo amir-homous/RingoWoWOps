@@ -9,6 +9,7 @@ TABLES = {
     "snapshots": "snapshots.csv",
     "notes": "notes.csv",
     "activities": "activities.csv",
+    "events": "events.csv",
 }
 
 
@@ -43,7 +44,7 @@ def create_table(conn, table_name, rows):
 
 def main():
     parser = argparse.ArgumentParser(description="Import RingoWoWOps CSV files into SQLite.")
-    parser.add_argument("csv_dir", help="Directory containing sessions.csv, snapshots.csv, notes.csv, activities.csv")
+    parser.add_argument("csv_dir", help="Directory containing RingoWoWOps CSV exports")
     parser.add_argument("--db", default="data/ringo_ops.sqlite", help="SQLite database output path")
     args = parser.parse_args()
 

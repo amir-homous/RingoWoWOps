@@ -1,19 +1,21 @@
 local ADDON_NAME = "RingoWoWOps"
 
 RingoWoWOpsDB = RingoWoWOpsDB or {
-  version = "0.2.1",
+  version = "0.2.2",
   sessions = {},
   snapshots = {},
   notes = {},
   activities = {},
+  events = {},
   settings = {}
 }
 
-RingoWoWOpsDB.version = "0.2.1"
+RingoWoWOpsDB.version = "0.2.2"
 RingoWoWOpsDB.sessions = RingoWoWOpsDB.sessions or {}
 RingoWoWOpsDB.snapshots = RingoWoWOpsDB.snapshots or {}
 RingoWoWOpsDB.notes = RingoWoWOpsDB.notes or {}
 RingoWoWOpsDB.activities = RingoWoWOpsDB.activities or {}
+RingoWoWOpsDB.events = RingoWoWOpsDB.events or {}
 RingoWoWOpsDB.settings = RingoWoWOpsDB.settings or {}
 
 RingoWoWOpsDB.settings.default_activity = RingoWoWOpsDB.settings.default_activity or "questing"
@@ -33,6 +35,18 @@ end
 
 local function getXP()
   return UnitXP("player") or 0
+end
+
+local function getXPMax()
+  return UnitXPMax("player") or 0
+end
+
+local function getRestedXP()
+  if GetXPExhaustion then
+    return GetXPExhaustion() or 0
+  end
+
+  return 0
 end
 
 local function getLevel()
@@ -100,6 +114,8 @@ local function snapshot(reason)
     zone = getZone(),
     subzone = getSubZone(),
     xp = getXP(),
+    xp_max = getXPMax(),
+    rested_xp = getRestedXP(),
     gold = getGold(),
     bags_free = getBagsFree(),
     activity = currentActivity,
@@ -121,6 +137,61 @@ local function addActivityRecord(activity, source)
     source = source or "manual",
     primary_realm = isPrimaryRealm()
   })
+end
+
+local function addStructuredEvent(eventType, text, details)
+  table.insert(RingoWoWOpsDB.events, {
+    time = now(),
+    character = getCharacter(),
+    realm = getRealm(),
+    level = getLevel(),
+    zone = getZone(),
+    type = eventType,
+    text = text or "",
+    details = details or "",
+    gold = getGold(),
+    activity = currentActivity,
+    primary_realm = isPrimaryRealm()
+  })
+
+  printMsg("Event saved: " .. eventType)
+end
+
+local function addGiftEvent(rest)
+  local amount, source = (rest or ""):match("^(%S+)%s+(.+)$")
+  if not amount or not source or source == "" then
+    printMsg("Usage: /rwo gift <amount> <source>")
+    return
+  end
+
+  addStructuredEvent("gift", "gift " .. amount .. " " .. source, "amount=" .. amount .. "; source=" .. source)
+end
+
+local function addTrainingEvent(text)
+  if not text or text == "" then
+    printMsg("Usage: /rwo train <text>")
+    return
+  end
+
+  addStructuredEvent("training", text, text)
+end
+
+local function addAHScanEvent(itemsCount)
+  if not itemsCount or itemsCount == "" then
+    printMsg("Usage: /rwo ahscan <items_count>")
+    return
+  end
+
+  addStructuredEvent("ahscan", "ahscan " .. itemsCount, "items_count=" .. itemsCount)
+end
+
+local function addMarketEvent(text)
+  if not text or text == "" then
+    printMsg("Usage: /rwo market <text>")
+    return
+  end
+
+  addStructuredEvent("market", text, text)
 end
 
 local function startSession(source)
@@ -310,6 +381,7 @@ local function status()
   print("Snapshots: " .. tostring(#RingoWoWOpsDB.snapshots))
   print("Notes: " .. tostring(#RingoWoWOpsDB.notes))
   print("Activities: " .. tostring(#RingoWoWOpsDB.activities))
+  print("Events: " .. tostring(#RingoWoWOpsDB.events))
 end
 
 SLASH_RINGOWOWOPS1 = "/rwo"
@@ -328,6 +400,14 @@ SlashCmdList["RINGOWOWOPS"] = function(msg)
     status()
   elseif command == "note" then
     addNote(rest)
+  elseif command == "gift" then
+    addGiftEvent(rest)
+  elseif command == "train" then
+    addTrainingEvent(rest)
+  elseif command == "ahscan" then
+    addAHScanEvent(rest)
+  elseif command == "market" then
+    addMarketEvent(rest)
   elseif command == "activity" then
     setActivity(rest)
   elseif command == "default" then
@@ -335,7 +415,7 @@ SlashCmdList["RINGOWOWOPS"] = function(msg)
   elseif command == "realm" then
     setPrimaryRealm(rest)
   else
-    printMsg("Commands: start, snap, stop, status, note <text>, activity <type>, default <activity>, realm [name]")
+    printMsg("Commands: start, snap, stop, status, note <text>, gift <amount> <source>, train <text>, ahscan <items_count>, market <text>, activity <type>, default <activity>, realm [name]")
   end
 end
 
@@ -369,4 +449,4 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
   end
 end)
 
-printMsg("Loaded v0.2.1. Auto session enabled. Default activity: " .. currentActivity)
+printMsg("Loaded v0.2.2. Auto session enabled. Default activity: " .. currentActivity)

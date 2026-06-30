@@ -55,6 +55,7 @@ def main():
     write_csv(out_dir / "snapshots.csv", data.get("snapshots", []))
     write_csv(out_dir / "notes.csv", data.get("notes", []))
     write_csv(out_dir / "activities.csv", data.get("activities", []))
+    write_csv(out_dir / "events.csv", data.get("events", []))
 
     print(f"Parsed: {input_path}")
     print(f"Output: {out_dir}")

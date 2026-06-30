@@ -8,11 +8,12 @@ table.
 Example structure:
 
     RingoWoWOpsDB = {
-      version = "0.1.0",
+      version = "0.2.2",
       sessions = {},
       snapshots = {},
       notes = {},
       activities = {},
+      events = {},
       settings = {}
     }
 
@@ -63,6 +64,8 @@ Fields:
   zone        string
   subzone     string
   xp          integer
+  xp_max      integer
+  rested_xp   integer
   gold        integer (copper)
   bags_free   integer
   activity    string
@@ -83,6 +86,40 @@ Typical usage:
 -   Team notes
 -   Farming ideas
 -   Route problems
+
+------------------------------------------------------------------------
+
+## Structured Events
+
+Created with:
+
+    /rwo gift <amount> <source>
+    /rwo train <text>
+    /rwo ahscan <items_count>
+    /rwo market <text>
+
+Stored in:
+
+    RingoWoWOpsDB.events
+
+Fields:
+
+  Field          Type             Description
+  -------------- ---------------- ---------------------------
+  time           unix timestamp   Event time
+  character      string           Character name
+  realm          string           Realm
+  level          integer          Current level
+  zone           string           Current zone
+  type           string           gift, training, ahscan, market
+  text           string           Human-readable event text
+  details        string           Simple detail string
+  gold           integer          Current money in copper
+  activity       string           Current activity label
+  primary_realm  boolean          Whether row belongs to the primary realm
+
+These commands only record observations. They do not buy, sell, invite,
+whisper, move, fight, or perform protected gameplay actions.
 
 ------------------------------------------------------------------------
 

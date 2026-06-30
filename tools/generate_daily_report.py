@@ -35,6 +35,17 @@ def fetch_all(conn, query):
     return [dict(row) for row in conn.execute(query).fetchall()]
 
 
+def fetch_table(conn, table_name):
+    exists = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
+    ).fetchone()
+    if not exists:
+        return []
+
+    return fetch_all(conn, f'SELECT * FROM "{table_name}"')
+
+
 def to_int(value, default=0):
     try:
         if value is None or value == "":
@@ -114,10 +125,11 @@ def main():
 
     conn = sqlite3.connect(db_path)
 
-    sessions = fetch_all(conn, "SELECT * FROM sessions")
-    snapshots = fetch_all(conn, "SELECT * FROM snapshots")
-    notes = fetch_all(conn, "SELECT * FROM notes")
-    activities = fetch_all(conn, "SELECT * FROM activities")
+    sessions = fetch_table(conn, "sessions")
+    snapshots = fetch_table(conn, "snapshots")
+    notes = fetch_table(conn, "notes")
+    activities = fetch_table(conn, "activities")
+    events = fetch_table(conn, "events")
 
     primary_sessions = [s for s in sessions if is_completed_session(s) and is_primary_row(s)]
     primary_snapshots = [s for s in snapshots if is_primary_row(s)]
@@ -166,6 +178,17 @@ def main():
     training_notes = [n for n in notes if "training" in str(n.get("text", "")).lower()]
     ah_notes = [n for n in notes if (n.get("category") == "ah" or "auction" in str(n.get("text", "")).lower() or "scan" in str(n.get("text", "")).lower())]
 
+    primary_events = [e for e in events if is_primary_row(e)]
+    event_counts = {}
+    for event in primary_events:
+        event_type = (event.get("type") or "unknown").strip().lower() or "unknown"
+        event_counts[event_type] = event_counts.get(event_type, 0) + 1
+
+    gift_events = [e for e in primary_events if (e.get("type") or "").lower() == "gift"]
+    training_events = [e for e in primary_events if (e.get("type") or "").lower() == "training"]
+    ahscan_events = [e for e in primary_events if (e.get("type") or "").lower() == "ahscan"]
+    market_events = [e for e in primary_events if (e.get("type") or "").lower() == "market"]
+
     lines = []
     lines.append("# RingoWoWOps Daily Report")
     lines.append("")
@@ -193,11 +216,11 @@ def main():
     lines.append("")
     lines.append(f"- Raw net copper change: {total_gold_raw} ({copper_to_gold(total_gold_raw)})")
     lines.append(f"- Raw gold/hour: {copper_to_gold(int(gold_per_hour_raw))}/hour")
-    if gift_notes:
-        lines.append("- Gift notes detected: yes")
+    if gift_events or gift_notes:
+        lines.append("- Gift notes/events detected: yes")
         lines.append("- Gold/hour warning: gift income should be excluded from farming analysis.")
     else:
-        lines.append("- Gift notes detected: no")
+        lines.append("- Gift notes/events detected: no")
 
     lines.append("")
     lines.append("## Activity Summary")
@@ -225,9 +248,28 @@ def main():
     lines.append("")
     lines.append("## Detected Operational Events")
     lines.append("")
-    lines.append(f"- Gift events: {len(gift_notes)}")
-    lines.append(f"- Training/setup events: {len(training_notes)}")
-    lines.append(f"- AH/scan events: {len(ah_notes)}")
+    lines.append(f"- Structured events: {len(primary_events)}")
+    if event_counts:
+        for event_type, count in sorted(event_counts.items(), key=lambda item: item[0]):
+            lines.append(f"- {event_type}: {count}")
+    else:
+        lines.append("- No structured events recorded.")
+    lines.append(f"- Gift events: {len(gift_events)} structured, {len(gift_notes)} legacy notes")
+    lines.append(f"- Training events: {len(training_events)} structured, {len(training_notes)} legacy notes")
+    lines.append(f"- AH scan events: {len(ahscan_events)} structured, {len(ah_notes)} legacy notes")
+    lines.append(f"- Market notes: {len(market_events)} structured")
+
+    if primary_events:
+        lines.append("")
+        lines.append("### Recent Structured Events")
+        lines.append("")
+        for event in primary_events[-25:]:
+            t = format_ts(event.get("time"))
+            event_type = event.get("type", "unknown") or "unknown"
+            text = event.get("text", "")
+            gold = copper_to_gold(to_int(event.get("gold")))
+            activity = event.get("activity", "")
+            lines.append(f"- {t} [{event_type}] {text} ({gold}, {activity})")
 
     lines.append("")
     lines.append("## Recommendation")
