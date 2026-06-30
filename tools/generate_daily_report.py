@@ -4,6 +4,32 @@ from pathlib import Path
 from datetime import datetime
 
 
+ACTIVITY_ALIASES = {
+    "quest": "questing",
+    "questin": "questing",
+    "questing": "questing",
+    "train": "training",
+    "training": "training",
+    "herb": "gathering",
+    "herbalism": "gathering",
+    "mine": "gathering",
+    "mining": "gathering",
+    "gather": "gathering",
+    "gathering": "gathering",
+    "ah": "auction",
+    "auction": "auction",
+    "bank": "banking",
+    "banking": "banking",
+    "dungeon": "dungeon",
+    "raid": "raid",
+    "team": "team",
+    "idle": "idle",
+    "other": "other",
+}
+
+CITY_ACTIVITIES = {"training", "auction", "banking"}
+
+
 def fetch_all(conn, query):
     conn.row_factory = sqlite3.Row
     return [dict(row) for row in conn.execute(query).fetchall()]
@@ -34,6 +60,45 @@ def format_ts(ts):
     return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def normalize_activity(value):
+    value = (value or "other").strip().lower()
+    return ACTIVITY_ALIASES.get(value, value or "other")
+
+
+def is_primary_row(row):
+    if row.get("realm") == "Spineshatter":
+        return True
+    if str(row.get("primary_realm", "")).lower() in ("true", "1", "yes"):
+        return True
+    return False
+
+
+def is_completed_session(row):
+    return bool(row.get("duration_seconds")) and row.get("status", "completed") in ("completed", "")
+
+
+def latest_by_time(rows):
+    if not rows:
+        return {}
+    return max(rows, key=lambda row: to_int(row.get("time", row.get("ended_at", row.get("started_at", 0)))))
+
+
+def strongest_current_snapshot(snapshots):
+    primary = [s for s in snapshots if is_primary_row(s)]
+    if not primary:
+        primary = snapshots[:]
+
+    if not primary:
+        return {}
+
+    # Prefer the newest snapshot with valid level and non-empty zone.
+    valid = [s for s in primary if to_int(s.get("level", 0)) > 0 and s.get("zone")]
+    if valid:
+        return latest_by_time(valid)
+
+    return latest_by_time(primary)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Generate a Markdown daily report from RingoWoWOps SQLite data.")
     parser.add_argument("--db", default="data/ringo_ops.sqlite", help="SQLite database path")
@@ -54,16 +119,52 @@ def main():
     notes = fetch_all(conn, "SELECT * FROM notes")
     activities = fetch_all(conn, "SELECT * FROM activities")
 
-    completed_sessions = [s for s in sessions if s.get("status", "") in ("completed", "") and s.get("duration_seconds", "")]
-    primary_sessions = [s for s in completed_sessions if s.get("realm") == "Spineshatter" or s.get("primary_realm") in ("True", "true", "1")]
+    primary_sessions = [s for s in sessions if is_completed_session(s) and is_primary_row(s)]
+    primary_snapshots = [s for s in snapshots if is_primary_row(s)]
 
     total_duration = sum(to_int(s.get("duration_seconds")) for s in primary_sessions)
-    total_gold = sum(to_int(s.get("gold_end")) - to_int(s.get("gold_start")) for s in primary_sessions)
+    total_gold_raw = sum(to_int(s.get("gold_end")) - to_int(s.get("gold_start")) for s in primary_sessions)
 
-    latest_snapshot = snapshots[-1] if snapshots else {}
-    latest_level = latest_snapshot.get("level", "")
+    latest_snapshot = strongest_current_snapshot(snapshots)
+    latest_level = to_int(latest_snapshot.get("level", 0))
     latest_zone = latest_snapshot.get("zone", "")
     latest_gold = to_int(latest_snapshot.get("gold", 0))
+    latest_time = latest_snapshot.get("time", "")
+
+    level_values = [to_int(s.get("level")) for s in primary_snapshots if to_int(s.get("level")) > 0]
+    level_start = min(level_values) if level_values else latest_level
+    level_end = max(level_values) if level_values else latest_level
+    levels_gained = max(0, level_end - level_start)
+
+    # Use the highest tracked level if newest snapshot looks stale or lower than max level.
+    if level_end > latest_level:
+        latest_level = level_end
+
+    # Prefer the latest non-zero gold if current snapshot is zero but older snapshots had gold.
+    gold_values = [to_int(s.get("gold")) for s in primary_snapshots if to_int(s.get("gold")) > 0]
+    gold_warning = None
+    if latest_gold == 0 and gold_values:
+        latest_gold = gold_values[-1]
+        gold_warning = "Latest snapshot had 0 copper; using latest known non-zero gold from tracked data."
+
+    duration_hours = total_duration / 3600 if total_duration else 0
+    levels_per_hour = levels_gained / duration_hours if duration_hours else 0
+    gold_per_hour_raw = total_gold_raw / duration_hours if duration_hours else 0
+
+    activity_counts = {}
+    for activity in activities:
+        if not is_primary_row(activity):
+            continue
+        name = normalize_activity(activity.get("activity"))
+        activity_counts[name] = activity_counts.get(name, 0) + 1
+
+    city_count = sum(count for name, count in activity_counts.items() if name in CITY_ACTIVITIES)
+    action_count = sum(activity_counts.values())
+    city_ratio = (city_count / action_count * 100) if action_count else 0
+
+    gift_notes = [n for n in notes if (n.get("category") == "gift" or str(n.get("text", "")).lower().startswith("gift"))]
+    training_notes = [n for n in notes if "training" in str(n.get("text", "")).lower()]
+    ah_notes = [n for n in notes if (n.get("category") == "ah" or "auction" in str(n.get("text", "")).lower() or "scan" in str(n.get("text", "")).lower())]
 
     lines = []
     lines.append("# RingoWoWOps Daily Report")
@@ -75,45 +176,78 @@ def main():
     lines.append(f"- Level: {latest_level}")
     lines.append(f"- Zone: {latest_zone}")
     lines.append(f"- Gold: {copper_to_gold(latest_gold)}")
+    lines.append(f"- Latest snapshot time: {format_ts(latest_time)}")
+    if gold_warning:
+        lines.append(f"- Data warning: {gold_warning}")
+
     lines.append("")
-    lines.append("## Session Summary")
+    lines.append("## Progress Summary")
     lines.append("")
-    lines.append(f"- Total sessions: {len(sessions)}")
-    lines.append(f"- Completed primary sessions: {len(primary_sessions)}")
+    lines.append(f"- Level range in tracked data: {level_start} -> {level_end}")
+    lines.append(f"- Levels gained in primary data: {levels_gained}")
     lines.append(f"- Total tracked duration: {round(total_duration / 60, 1)} minutes")
-    lines.append(f"- Net copper change: {total_gold} ({copper_to_gold(total_gold)})")
-    lines.append("")
-    lines.append("## Activity Counts")
-    lines.append("")
-
-    activity_counts = {}
-    for activity in activities:
-        name = activity.get("activity", "unknown") or "unknown"
-        activity_counts[name] = activity_counts.get(name, 0) + 1
-
-    for name, count in sorted(activity_counts.items(), key=lambda item: item[0]):
-        lines.append(f"- {name}: {count}")
+    lines.append(f"- Estimated levels/hour: {round(levels_per_hour, 2)}")
 
     lines.append("")
-    lines.append("## Notes")
+    lines.append("## Economy Summary")
     lines.append("")
+    lines.append(f"- Raw net copper change: {total_gold_raw} ({copper_to_gold(total_gold_raw)})")
+    lines.append(f"- Raw gold/hour: {copper_to_gold(int(gold_per_hour_raw))}/hour")
+    if gift_notes:
+        lines.append("- Gift notes detected: yes")
+        lines.append("- Gold/hour warning: gift income should be excluded from farming analysis.")
+    else:
+        lines.append("- Gift notes detected: no")
 
+    lines.append("")
+    lines.append("## Activity Summary")
+    lines.append("")
+    if activity_counts:
+        for name, count in sorted(activity_counts.items(), key=lambda item: item[0]):
+            lines.append(f"- {name}: {count}")
+    else:
+        lines.append("- No activity records.")
+    lines.append("")
+    lines.append(f"- City/setup activity ratio by activity events: {round(city_ratio, 1)}%")
+
+    lines.append("")
+    lines.append("## Important Notes")
+    lines.append("")
     if notes:
-        for note in notes[-20:]:
+        for note in notes[-25:]:
             t = format_ts(note.get("time"))
-            category = note.get("category", "general")
+            category = note.get("category", "general") or "general"
             text = note.get("text", "")
             lines.append(f"- {t} [{category}] {text}")
     else:
         lines.append("- No notes recorded.")
 
     lines.append("")
+    lines.append("## Detected Operational Events")
+    lines.append("")
+    lines.append(f"- Gift events: {len(gift_notes)}")
+    lines.append(f"- Training/setup events: {len(training_notes)}")
+    lines.append(f"- AH/scan events: {len(ah_notes)}")
+
+    lines.append("")
+    lines.append("## Recommendation")
+    lines.append("")
+    if latest_level < 12:
+        lines.append("- Continue Eversong Woods until around level 12.")
+        lines.append("- Keep activity as `questing` unless you intentionally switch to gathering/training/auction.")
+    elif latest_level < 20:
+        lines.append("- Move toward Ghostlands / Tranquillien and continue questing there.")
+        lines.append("- Gather nodes only if they are on-route or require minimal detour.")
+    else:
+        lines.append("- Continue the planned Horde leveling route and begin watching dungeon opportunities.")
+
+    lines.append("")
     lines.append("## AI Review Questions")
     lines.append("")
-    lines.append("- Was leveling speed good for the current zone?")
-    lines.append("- Did city/training time reduce efficiency too much?")
-    lines.append("- Should the next session focus on questing, gathering, or city setup?")
-    lines.append("- Which notes should be converted into structured events later?")
+    lines.append("- Was the latest session mostly questing or city setup?")
+    lines.append("- Did the gold change come from gameplay, training cost, AH, or gift?")
+    lines.append("- Which notes should become structured commands later?")
+    lines.append("- Is the next best step leveling, profession setup, AH, or travel?")
 
     out_path.write_text("\n".join(lines), encoding="utf-8")
     print(f"Report written to: {out_path}")
