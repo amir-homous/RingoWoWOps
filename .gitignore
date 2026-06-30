@@ -19,3 +19,4 @@ Thumbs.db
 # WoW SavedVariables / private logs
 *.bak
 *_private.lua
+data/*.sqlite 

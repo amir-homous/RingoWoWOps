@@ -1,7 +1,7 @@
 local ADDON_NAME = "RingoWoWOps"
 
 RingoWoWOpsDB = RingoWoWOpsDB or {
-  version = "0.1.0",
+  version = "0.2.1",
   sessions = {},
   snapshots = {},
   notes = {},
@@ -9,15 +9,26 @@ RingoWoWOpsDB = RingoWoWOpsDB or {
   settings = {}
 }
 
+RingoWoWOpsDB.version = "0.2.1"
+RingoWoWOpsDB.sessions = RingoWoWOpsDB.sessions or {}
+RingoWoWOpsDB.snapshots = RingoWoWOpsDB.snapshots or {}
+RingoWoWOpsDB.notes = RingoWoWOpsDB.notes or {}
+RingoWoWOpsDB.activities = RingoWoWOpsDB.activities or {}
+RingoWoWOpsDB.settings = RingoWoWOpsDB.settings or {}
+
+RingoWoWOpsDB.settings.default_activity = RingoWoWOpsDB.settings.default_activity or "questing"
+RingoWoWOpsDB.settings.primary_realm = RingoWoWOpsDB.settings.primary_realm or nil
+
 local currentSession = nil
-local currentActivity = "idle"
+local currentActivity = RingoWoWOpsDB.settings.default_activity or "questing"
+local lastZone = nil
 
 local function now()
   return time()
 end
 
 local function getGold()
-  return GetMoney()
+  return GetMoney() or 0
 end
 
 local function getXP()
@@ -56,9 +67,25 @@ end
 local function getBagsFree()
   local free = 0
   for bag = 0, 4 do
-    free = free + (C_Container and C_Container.GetContainerNumFreeSlots(bag) or GetContainerNumFreeSlots(bag) or 0)
+    if C_Container and C_Container.GetContainerNumFreeSlots then
+      free = free + (C_Container.GetContainerNumFreeSlots(bag) or 0)
+    elseif GetContainerNumFreeSlots then
+      free = free + (GetContainerNumFreeSlots(bag) or 0)
+    end
   end
   return free
+end
+
+local function printMsg(msg)
+  print("|cff00ff99RingoWoWOps:|r " .. msg)
+end
+
+local function isPrimaryRealm()
+  local primary = RingoWoWOpsDB.settings.primary_realm
+  if not primary or primary == "" then
+    return true
+  end
+  return getRealm() == primary
 end
 
 local function snapshot(reason)
@@ -75,27 +102,44 @@ local function snapshot(reason)
     xp = getXP(),
     gold = getGold(),
     bags_free = getBagsFree(),
-    activity = currentActivity
+    activity = currentActivity,
+    primary_realm = isPrimaryRealm()
   }
 
   table.insert(RingoWoWOpsDB.snapshots, snap)
   return snap
 end
 
-local function printMsg(msg)
-  print("|cff00ff99RingoWoWOps:|r " .. msg)
+local function addActivityRecord(activity, source)
+  table.insert(RingoWoWOpsDB.activities, {
+    time = now(),
+    character = getCharacter(),
+    realm = getRealm(),
+    level = getLevel(),
+    zone = getZone(),
+    activity = activity,
+    source = source or "manual",
+    primary_realm = isPrimaryRealm()
+  })
 end
 
-local function startSession()
+local function startSession(source)
   if currentSession then
-    printMsg("Session already running.")
+    if source ~= "auto" then
+      printMsg("Session already running.")
+    end
     return
   end
 
-  local startSnap = snapshot("session_start")
+  if not currentActivity or currentActivity == "idle" then
+    currentActivity = RingoWoWOpsDB.settings.default_activity or "questing"
+  end
+
+  snapshot(source == "auto" and "auto_session_start" or "session_start")
 
   currentSession = {
     id = tostring(now()) .. "-" .. getCharacter(),
+    status = "running",
     started_at = now(),
     ended_at = nil,
     character = getCharacter(),
@@ -106,16 +150,26 @@ local function startSession()
     zone_start = getZone(),
     xp_start = getXP(),
     gold_start = getGold(),
-    activity_start = currentActivity
+    activity_start = currentActivity,
+    start_source = source or "manual",
+    primary_realm = isPrimaryRealm()
   }
 
   table.insert(RingoWoWOpsDB.sessions, currentSession)
-  printMsg("Session started.")
+  addActivityRecord(currentActivity, source == "auto" and "auto_session_start" or "session_start")
+
+  if source == "auto" then
+    printMsg("Auto session started. Activity: " .. currentActivity)
+  else
+    printMsg("Session started. Activity: " .. currentActivity)
+  end
 end
 
-local function stopSession()
+local function stopSession(source)
   if not currentSession then
-    printMsg("No active session.")
+    if source ~= "auto" then
+      printMsg("No active session.")
+    end
     return
   end
 
@@ -126,11 +180,52 @@ local function stopSession()
   currentSession.xp_end = getXP()
   currentSession.gold_end = getGold()
   currentSession.activity_end = currentActivity
+  currentSession.status = "completed"
+  currentSession.stop_source = source or "manual"
+  currentSession.primary_realm = isPrimaryRealm()
 
-  snapshot("session_stop")
+  snapshot(source == "auto" and "auto_session_stop" or "session_stop")
 
-  printMsg("Session stopped. Use /reload or logout to save SavedVariables.")
+  local xpGained = (currentSession.xp_end or 0) - (currentSession.xp_start or 0)
+  local goldGained = (currentSession.gold_end or 0) - (currentSession.gold_start or 0)
+
+  if source ~= "auto" then
+    printMsg("Session stopped. XP gained: " .. xpGained .. " | Copper gained: " .. goldGained)
+    printMsg("Use /reload or logout to save SavedVariables.")
+  end
+
   currentSession = nil
+end
+
+local function detectNoteCategory(text)
+  if not text then
+    return "general"
+  end
+
+  local first = text:match("^(%S+)")
+  if not first then
+    return "general"
+  end
+
+  first = string.lower(first)
+
+  if first == "ah" or first == "auction" then
+    return "ah"
+  elseif first == "lfg" then
+    return "lfg"
+  elseif first == "team" then
+    return "team"
+  elseif first == "route" then
+    return "route"
+  elseif first == "gift" then
+    return "gift"
+  elseif first == "gold" then
+    return "gold"
+  elseif first == "farm" then
+    return "farm"
+  end
+
+  return "general"
 end
 
 local function addNote(text)
@@ -146,7 +241,9 @@ local function addNote(text)
     level = getLevel(),
     zone = getZone(),
     activity = currentActivity,
-    text = text
+    category = detectNoteCategory(text),
+    text = text,
+    primary_realm = isPrimaryRealm()
   })
 
   printMsg("Note saved.")
@@ -158,52 +255,118 @@ local function setActivity(activity)
     return
   end
 
-  currentActivity = activity
+  currentActivity = string.lower(activity)
+  addActivityRecord(currentActivity, "manual")
 
-  table.insert(RingoWoWOpsDB.activities, {
-    time = now(),
-    character = getCharacter(),
-    realm = getRealm(),
-    level = getLevel(),
-    zone = getZone(),
-    activity = activity
-  })
+  printMsg("Activity set to: " .. currentActivity)
+end
 
-  printMsg("Activity set to: " .. activity)
+local function setDefaultActivity(activity)
+  if not activity or activity == "" then
+    printMsg("Usage: /rwo default <activity>")
+    return
+  end
+
+  RingoWoWOpsDB.settings.default_activity = string.lower(activity)
+  currentActivity = RingoWoWOpsDB.settings.default_activity
+  printMsg("Default activity set to: " .. currentActivity)
+end
+
+local function setPrimaryRealm(realm)
+  if not realm or realm == "" then
+    RingoWoWOpsDB.settings.primary_realm = getRealm()
+  else
+    RingoWoWOpsDB.settings.primary_realm = realm
+  end
+
+  printMsg("Primary realm set to: " .. tostring(RingoWoWOpsDB.settings.primary_realm))
 end
 
 local function status()
   printMsg("Status")
   print("Character: " .. getCharacter() .. " - " .. getRealm())
+  print("Primary realm: " .. tostring(RingoWoWOpsDB.settings.primary_realm or "not set"))
+  print("Is primary realm: " .. tostring(isPrimaryRealm()))
   print("Level: " .. getLevel())
   print("Zone: " .. getZone())
   print("Gold copper: " .. getGold())
   print("XP: " .. getXP())
   print("Bags free: " .. getBagsFree())
   print("Activity: " .. currentActivity)
+  print("Default activity: " .. tostring(RingoWoWOpsDB.settings.default_activity))
   print("Session running: " .. tostring(currentSession ~= nil))
+
+  if currentSession then
+    local duration = now() - (currentSession.started_at or now())
+    local xpGained = getXP() - (currentSession.xp_start or getXP())
+    local goldGained = getGold() - (currentSession.gold_start or getGold())
+
+    print("Session duration seconds: " .. duration)
+    print("Session XP gained: " .. xpGained)
+    print("Session copper gained: " .. goldGained)
+  end
+
+  print("Sessions: " .. tostring(#RingoWoWOpsDB.sessions))
+  print("Snapshots: " .. tostring(#RingoWoWOpsDB.snapshots))
+  print("Notes: " .. tostring(#RingoWoWOpsDB.notes))
+  print("Activities: " .. tostring(#RingoWoWOpsDB.activities))
 end
 
 SLASH_RINGOWOWOPS1 = "/rwo"
 SlashCmdList["RINGOWOWOPS"] = function(msg)
   local command, rest = msg:match("^(%S*)%s*(.-)$")
+  command = string.lower(command or "")
 
   if command == "start" then
-    startSession()
+    startSession("manual")
   elseif command == "snap" then
     snapshot("manual")
     printMsg("Snapshot saved.")
   elseif command == "stop" then
-    stopSession()
+    stopSession("manual")
   elseif command == "status" then
     status()
   elseif command == "note" then
     addNote(rest)
   elseif command == "activity" then
     setActivity(rest)
+  elseif command == "default" then
+    setDefaultActivity(rest)
+  elseif command == "realm" then
+    setPrimaryRealm(rest)
   else
-    printMsg("Commands: start, snap, stop, status, note <text>, activity <type>")
+    printMsg("Commands: start, snap, stop, status, note <text>, activity <type>, default <activity>, realm [name]")
   end
 end
 
-printMsg("Loaded. Use /rwo start")
+local eventFrame = CreateFrame("Frame")
+
+eventFrame:RegisterEvent("PLAYER_LOGIN")
+eventFrame:RegisterEvent("PLAYER_LOGOUT")
+eventFrame:RegisterEvent("PLAYER_LEVEL_UP")
+eventFrame:RegisterEvent("ZONE_CHANGED_NEW_AREA")
+
+eventFrame:SetScript("OnEvent", function(_, event, ...)
+  if event == "PLAYER_LOGIN" then
+    lastZone = getZone()
+    currentActivity = RingoWoWOpsDB.settings.default_activity or "questing"
+    startSession("auto")
+
+  elseif event == "PLAYER_LOGOUT" then
+    stopSession("auto")
+
+  elseif event == "PLAYER_LEVEL_UP" then
+    snapshot("auto_level_up")
+    printMsg("Auto snapshot saved: level up.")
+
+  elseif event == "ZONE_CHANGED_NEW_AREA" then
+    local zone = getZone()
+    if zone ~= "" and zone ~= lastZone then
+      lastZone = zone
+      snapshot("auto_zone_change")
+      printMsg("Auto snapshot saved: zone change.")
+    end
+  end
+end)
+
+printMsg("Loaded v0.2.1. Auto session enabled. Default activity: " .. currentActivity)
