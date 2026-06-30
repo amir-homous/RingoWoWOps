@@ -1,22 +1,22 @@
 local ADDON_NAME = "RingoWoWOps"
 
-RingoWoWOpsDB = RingoWoWOpsDB or {
-  version = "0.2.2",
-  sessions = {},
-  snapshots = {},
-  notes = {},
-  activities = {},
-  events = {},
-  settings = {}
-}
+RingoWoWOpsDB = RingoWoWOpsDB or {}
+
+local function EnsureTable(name)
+  if type(RingoWoWOpsDB[name]) ~= "table" then
+    RingoWoWOpsDB[name] = {}
+  end
+
+  return RingoWoWOpsDB[name]
+end
 
 RingoWoWOpsDB.version = "0.2.2"
-RingoWoWOpsDB.sessions = RingoWoWOpsDB.sessions or {}
-RingoWoWOpsDB.snapshots = RingoWoWOpsDB.snapshots or {}
-RingoWoWOpsDB.notes = RingoWoWOpsDB.notes or {}
-RingoWoWOpsDB.activities = RingoWoWOpsDB.activities or {}
-RingoWoWOpsDB.events = RingoWoWOpsDB.events or {}
-RingoWoWOpsDB.settings = RingoWoWOpsDB.settings or {}
+EnsureTable("sessions")
+EnsureTable("snapshots")
+EnsureTable("notes")
+EnsureTable("activities")
+EnsureTable("events")
+EnsureTable("settings")
 
 RingoWoWOpsDB.settings.default_activity = RingoWoWOpsDB.settings.default_activity or "questing"
 RingoWoWOpsDB.settings.primary_realm = RingoWoWOpsDB.settings.primary_realm or nil
@@ -122,12 +122,12 @@ local function snapshot(reason)
     primary_realm = isPrimaryRealm()
   }
 
-  table.insert(RingoWoWOpsDB.snapshots, snap)
+  table.insert(EnsureTable("snapshots"), snap)
   return snap
 end
 
 local function addActivityRecord(activity, source)
-  table.insert(RingoWoWOpsDB.activities, {
+  table.insert(EnsureTable("activities"), {
     time = now(),
     character = getCharacter(),
     realm = getRealm(),
@@ -140,7 +140,7 @@ local function addActivityRecord(activity, source)
 end
 
 local function addStructuredEvent(eventType, text, details)
-  table.insert(RingoWoWOpsDB.events, {
+  table.insert(EnsureTable("events"), {
     time = now(),
     character = getCharacter(),
     realm = getRealm(),
@@ -226,7 +226,7 @@ local function startSession(source)
     primary_realm = isPrimaryRealm()
   }
 
-  table.insert(RingoWoWOpsDB.sessions, currentSession)
+  table.insert(EnsureTable("sessions"), currentSession)
   addActivityRecord(currentActivity, source == "auto" and "auto_session_start" or "session_start")
 
   if source == "auto" then
@@ -305,7 +305,7 @@ local function addNote(text)
     return
   end
 
-  table.insert(RingoWoWOpsDB.notes, {
+  table.insert(EnsureTable("notes"), {
     time = now(),
     character = getCharacter(),
     realm = getRealm(),
@@ -377,11 +377,11 @@ local function status()
     print("Session copper gained: " .. goldGained)
   end
 
-  print("Sessions: " .. tostring(#RingoWoWOpsDB.sessions))
-  print("Snapshots: " .. tostring(#RingoWoWOpsDB.snapshots))
-  print("Notes: " .. tostring(#RingoWoWOpsDB.notes))
-  print("Activities: " .. tostring(#RingoWoWOpsDB.activities))
-  print("Events: " .. tostring(#RingoWoWOpsDB.events))
+  print("Sessions: " .. tostring(#EnsureTable("sessions")))
+  print("Snapshots: " .. tostring(#EnsureTable("snapshots")))
+  print("Notes: " .. tostring(#EnsureTable("notes")))
+  print("Activities: " .. tostring(#EnsureTable("activities")))
+  print("Events: " .. tostring(#EnsureTable("events")))
 end
 
 SLASH_RINGOWOWOPS1 = "/rwo"
