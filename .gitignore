@@ -20,3 +20,4 @@ Thumbs.db
 *.bak
 *_private.lua
 data/*.sqlite 
+data/upload/ 
