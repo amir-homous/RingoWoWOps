@@ -1,298 +1,172 @@
 import argparse
 import sqlite3
+from datetime import date, datetime, timedelta, timezone, tzinfo
 from pathlib import Path
-from datetime import datetime
-
-
-ACTIVITY_ALIASES = {
-    "quest": "questing",
-    "questin": "questing",
-    "questing": "questing",
-    "train": "training",
-    "training": "training",
-    "herb": "gathering",
-    "herbalism": "gathering",
-    "mine": "gathering",
-    "mining": "gathering",
-    "gather": "gathering",
-    "gathering": "gathering",
-    "ah": "auction",
-    "auction": "auction",
-    "bank": "banking",
-    "banking": "banking",
-    "dungeon": "dungeon",
-    "raid": "raid",
-    "team": "team",
-    "idle": "idle",
-    "other": "other",
-}
-
-CITY_ACTIVITIES = {"training", "auction", "banking"}
-
-
-def fetch_all(conn, query):
-    conn.row_factory = sqlite3.Row
-    return [dict(row) for row in conn.execute(query).fetchall()]
-
-
-def fetch_table(conn, table_name):
-    exists = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
-        (table_name,),
-    ).fetchone()
-    if not exists:
-        return []
-
-    return fetch_all(conn, f'SELECT * FROM "{table_name}"')
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 def to_int(value, default=0):
     try:
-        if value is None or value == "":
-            return default
-        return int(float(value))
-    except Exception:
+        return default if value in (None, "") else int(float(value))
+    except (TypeError, ValueError):
         return default
 
 
 def copper_to_gold(copper):
     sign = "-" if copper < 0 else ""
-    copper = abs(copper)
-    gold = copper // 10000
-    silver = (copper % 10000) // 100
-    copper = copper % 100
-    return f"{sign}{gold}g {silver}s {copper}c"
+    copper = abs(int(copper))
+    return f"{sign}{copper // 10000}g {(copper % 10000) // 100}s {copper % 100}c"
 
 
-def format_ts(ts):
-    ts = to_int(ts)
-    if ts <= 0:
-        return ""
-    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+def resolve_timezone(timezone_name: str) -> tzinfo:
+    if timezone_name == "UTC":
+        return timezone.utc
+    try:
+        return ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError as exc:
+        # Iran abolished seasonal clock changes in 2022. This standard-library
+        # fallback is correct for this project's 2026+ default reporting dates.
+        if timezone_name == "Asia/Tehran":
+            return timezone(timedelta(hours=3, minutes=30), "Asia/Tehran")
+        raise ValueError(f"Unknown timezone {timezone_name!r}; install system timezone data or choose a supported IANA timezone") from exc
 
 
-def normalize_activity(value):
-    value = (value or "other").strip().lower()
-    return ACTIVITY_ALIASES.get(value, value or "other")
+def report_window(report_date: str | None, timezone_name: str) -> tuple[date, int, int, tzinfo]:
+    tz = resolve_timezone(timezone_name)
+    selected = date.fromisoformat(report_date) if report_date else datetime.now(tz).date()
+    start = datetime.combine(selected, datetime.min.time(), tzinfo=tz)
+    end = start + timedelta(days=1)
+    return selected, int(start.timestamp()), int(end.timestamp()), tz
 
 
-def is_primary_row(row):
-    if row.get("realm") == "Spineshatter":
-        return True
-    if str(row.get("primary_realm", "")).lower() in ("true", "1", "yes"):
-        return True
-    return False
+def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone() is not None
 
 
-def is_completed_session(row):
-    return bool(row.get("duration_seconds")) and row.get("status", "completed") in ("completed", "")
+def _scope_sql(character: str | None, realm: str | None, alias: str = "") -> tuple[str, list[str]]:
+    prefix = f"{alias}." if alias else ""
+    clauses, values = [], []
+    if character:
+        clauses.append(f"{prefix}character = ?")
+        values.append(character)
+    if realm:
+        clauses.append(f"{prefix}realm = ?")
+        values.append(realm)
+    return (" AND " + " AND ".join(clauses)) if clauses else "", values
 
 
-def latest_by_time(rows):
-    if not rows:
-        return {}
-    return max(rows, key=lambda row: to_int(row.get("time", row.get("ended_at", row.get("started_at", 0)))))
+def _rows(conn, table, time_column, start_ts, end_ts, character, realm):
+    if not _table_exists(conn, table):
+        return []
+    scope, params = _scope_sql(character, realm)
+    return [dict(row) for row in conn.execute(
+        f'SELECT * FROM "{table}" WHERE {time_column} >= ? AND {time_column} < ?{scope} ORDER BY {time_column}, record_id',
+        [start_ts, end_ts, *params],
+    )]
 
 
-def strongest_current_snapshot(snapshots):
-    primary = [s for s in snapshots if is_primary_row(s)]
-    if not primary:
-        primary = snapshots[:]
+def generate_report(
+    db_path: Path,
+    out_path: Path,
+    *,
+    report_date: str | None = None,
+    timezone_name: str = "UTC",
+    character: str | None = None,
+    realm: str | None = None,
+) -> dict:
+    selected, start_ts, end_ts, tz = report_window(report_date, timezone_name)
+    uri = f"file:{db_path.resolve().as_posix()}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        sessions = _rows(conn, "sessions", "started_at", start_ts, end_ts, character, realm)
+        snapshots = _rows(conn, "snapshots", "time", start_ts, end_ts, character, realm)
+        notes = _rows(conn, "notes", "time", start_ts, end_ts, character, realm)
+        activities = _rows(conn, "activities", "time", start_ts, end_ts, character, realm)
+        events = _rows(conn, "events", "time", start_ts, end_ts, character, realm)
+    finally:
+        conn.close()
 
-    if not primary:
-        return {}
+    identities = sorted({(row.get("character") or "", row.get("realm") or "") for rows in (sessions, snapshots, notes, activities, events) for row in rows})
+    if not character and len({name for name, _ in identities if name}) > 1:
+        names = ", ".join(name for name, _ in identities)
+        raise ValueError(f"Report scope contains multiple characters ({names}); specify --character")
+    if not realm and len({name for _, name in identities if name}) > 1:
+        names = ", ".join(name for _, name in identities)
+        raise ValueError(f"Report scope contains multiple realms ({names}); specify --realm")
 
-    # Prefer the newest snapshot with valid level and non-empty zone.
-    valid = [s for s in primary if to_int(s.get("level", 0)) > 0 and s.get("zone")]
-    if valid:
-        return latest_by_time(valid)
+    complete = [row for row in sessions if row.get("ended_at") is not None and row.get("duration_seconds") is not None and row.get("status") in ("completed", "")]
+    incomplete = [row for row in sessions if row not in complete]
+    total_duration = sum(to_int(row.get("duration_seconds")) for row in complete)
+    raw_balance_change = sum(to_int(row.get("gold_end")) - to_int(row.get("gold_start")) for row in complete)
+    latest = snapshots[-1] if snapshots else {}
 
-    return latest_by_time(primary)
+    def fmt_ts(value):
+        return datetime.fromtimestamp(to_int(value), tz=timezone.utc).astimezone(tz).strftime("%Y-%m-%d %H:%M:%S %Z") if value else ""
+
+    lines = [
+        "# RingoWoWOps Daily Report", "",
+        "## Report Scope", "",
+        f"- Window type: Calendar day",
+        f"- Date: {selected.isoformat()}",
+        f"- Timezone: {timezone_name}",
+        f"- Character filter: {character or 'auto (single-character scope required)'}",
+        f"- Realm filter: {realm or 'auto (single-realm scope required)'}",
+        f"- UTC interval: {datetime.fromtimestamp(start_ts, timezone.utc).isoformat()} to {datetime.fromtimestamp(end_ts, timezone.utc).isoformat()}", "",
+        "## Current State", "",
+        f"- Character: {latest.get('character', character or '')}",
+        f"- Realm: {latest.get('realm', realm or '')}",
+        f"- Level: {latest.get('level', '')}",
+        f"- Zone: {latest.get('zone', '')}",
+        f"- Exact observed money: {copper_to_gold(to_int(latest.get('gold')))}" if latest else "- Exact observed money: Missing",
+        f"- Latest snapshot: {fmt_ts(latest.get('time'))}" if latest else "- Latest snapshot: Missing", "",
+        "## Session Summary", "",
+        f"- Completed sessions started in scope: {len(complete)}",
+        f"- Incomplete sessions started in scope: {len(incomplete)}",
+        f"- Derived tracked duration: {round(total_duration / 60, 1)} minutes", "",
+        "## Money Data", "",
+        f"- Derived raw balance change: {copper_to_gold(raw_balance_change)} ({raw_balance_change} copper)",
+        "- Interpretation: Raw balance change is not profit and may include transfers, gifts, purchases, repairs, training, or other unclassified movements.",
+        "- Estimated profit: Missing; the Phase 2 ledger is not implemented.", "",
+        "## Activity Records", "",
+    ]
+    counts = {}
+    for row in activities:
+        key = row.get("activity") or "other"
+        counts[key] = counts.get(key, 0) + 1
+    lines.extend([f"- {key}: {counts[key]} event(s)" for key in sorted(counts)] or ["- No activity records in scope."])
+    lines.extend(["", "## Notes", ""])
+    lines.extend([f"- {fmt_ts(row.get('time'))} [{row.get('category') or 'general'}] {row.get('text') or ''}" for row in notes] or ["- No notes in scope."])
+    lines.extend(["", "## Structured Events", ""])
+    lines.extend([f"- {fmt_ts(row.get('time'))} [{row.get('type') or 'unknown'}] {row.get('text') or ''}" for row in events] or ["- No structured events in scope."])
+    lines.extend([
+        "", "## Data Quality", "",
+        "- Exact: timestamps and point-in-time game-state observations captured by the addon.",
+        "- Derived: durations and raw balance changes calculated from captured values.",
+        "- Manual: notes and structured events entered by the player.",
+        "- Estimated: no economic estimates are produced in Phase 1.",
+        "- Missing: classified income, expenses, transfers, inventory value, and reliable profit/hour.",
+        f"- Records in scope: {len(sessions)} sessions, {len(snapshots)} snapshots, {len(notes)} notes, {len(activities)} activities, {len(events)} events.",
+        "", "## Neutral Next Step", "",
+        "- Review incomplete sessions and validation warnings before interpreting trends.",
+        "- Use raw balance movement only as a reconciliation signal until the Phase 2 ledger exists.",
+    ])
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return {"date": selected.isoformat(), "timezone": timezone_name, "identities": identities, "counts": {"sessions": len(sessions), "snapshots": len(snapshots), "notes": len(notes), "activities": len(activities), "events": len(events)}}
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate a Markdown daily report from RingoWoWOps SQLite data.")
-    parser.add_argument("--db", default="data/ringo_ops.sqlite", help="SQLite database path")
-    parser.add_argument("--out", default="data/processed/daily_report.md", help="Output markdown path")
+    parser = argparse.ArgumentParser(description="Generate a scoped calendar-day Markdown report.")
+    parser.add_argument("--db", default="data/ringo_ops.sqlite")
+    parser.add_argument("--out", default="data/processed/daily_report.md")
+    parser.add_argument("--date", help="Calendar date in YYYY-MM-DD; defaults to today in --timezone")
+    parser.add_argument("--timezone", default="UTC", help="IANA timezone name")
+    parser.add_argument("--character")
+    parser.add_argument("--realm")
     args = parser.parse_args()
-
-    db_path = Path(args.db)
-    out_path = Path(args.out)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    if not db_path.exists():
-        raise FileNotFoundError(f"Database not found: {db_path}")
-
-    conn = sqlite3.connect(db_path)
-
-    sessions = fetch_table(conn, "sessions")
-    snapshots = fetch_table(conn, "snapshots")
-    notes = fetch_table(conn, "notes")
-    activities = fetch_table(conn, "activities")
-    events = fetch_table(conn, "events")
-
-    primary_sessions = [s for s in sessions if is_completed_session(s) and is_primary_row(s)]
-    primary_snapshots = [s for s in snapshots if is_primary_row(s)]
-
-    total_duration = sum(to_int(s.get("duration_seconds")) for s in primary_sessions)
-    total_gold_raw = sum(to_int(s.get("gold_end")) - to_int(s.get("gold_start")) for s in primary_sessions)
-
-    latest_snapshot = strongest_current_snapshot(snapshots)
-    latest_level = to_int(latest_snapshot.get("level", 0))
-    latest_zone = latest_snapshot.get("zone", "")
-    latest_gold = to_int(latest_snapshot.get("gold", 0))
-    latest_time = latest_snapshot.get("time", "")
-
-    level_values = [to_int(s.get("level")) for s in primary_snapshots if to_int(s.get("level")) > 0]
-    level_start = min(level_values) if level_values else latest_level
-    level_end = max(level_values) if level_values else latest_level
-    levels_gained = max(0, level_end - level_start)
-
-    # Use the highest tracked level if newest snapshot looks stale or lower than max level.
-    if level_end > latest_level:
-        latest_level = level_end
-
-    # Prefer the latest non-zero gold if current snapshot is zero but older snapshots had gold.
-    gold_values = [to_int(s.get("gold")) for s in primary_snapshots if to_int(s.get("gold")) > 0]
-    gold_warning = None
-    if latest_gold == 0 and gold_values:
-        latest_gold = gold_values[-1]
-        gold_warning = "Latest snapshot had 0 copper; using latest known non-zero gold from tracked data."
-
-    duration_hours = total_duration / 3600 if total_duration else 0
-    levels_per_hour = levels_gained / duration_hours if duration_hours else 0
-    gold_per_hour_raw = total_gold_raw / duration_hours if duration_hours else 0
-
-    activity_counts = {}
-    for activity in activities:
-        if not is_primary_row(activity):
-            continue
-        name = normalize_activity(activity.get("activity"))
-        activity_counts[name] = activity_counts.get(name, 0) + 1
-
-    city_count = sum(count for name, count in activity_counts.items() if name in CITY_ACTIVITIES)
-    action_count = sum(activity_counts.values())
-    city_ratio = (city_count / action_count * 100) if action_count else 0
-
-    gift_notes = [n for n in notes if (n.get("category") == "gift" or str(n.get("text", "")).lower().startswith("gift"))]
-    training_notes = [n for n in notes if "training" in str(n.get("text", "")).lower()]
-    ah_notes = [n for n in notes if (n.get("category") == "ah" or "auction" in str(n.get("text", "")).lower() or "scan" in str(n.get("text", "")).lower())]
-
-    primary_events = [e for e in events if is_primary_row(e)]
-    event_counts = {}
-    for event in primary_events:
-        event_type = (event.get("type") or "unknown").strip().lower() or "unknown"
-        event_counts[event_type] = event_counts.get(event_type, 0) + 1
-
-    gift_events = [e for e in primary_events if (e.get("type") or "").lower() == "gift"]
-    training_events = [e for e in primary_events if (e.get("type") or "").lower() == "training"]
-    ahscan_events = [e for e in primary_events if (e.get("type") or "").lower() == "ahscan"]
-    market_events = [e for e in primary_events if (e.get("type") or "").lower() == "market"]
-
-    lines = []
-    lines.append("# RingoWoWOps Daily Report")
-    lines.append("")
-    lines.append("## Current State")
-    lines.append("")
-    lines.append(f"- Character: {latest_snapshot.get('character', '')}")
-    lines.append(f"- Realm: {latest_snapshot.get('realm', '')}")
-    lines.append(f"- Level: {latest_level}")
-    lines.append(f"- Zone: {latest_zone}")
-    lines.append(f"- Gold: {copper_to_gold(latest_gold)}")
-    lines.append(f"- Latest snapshot time: {format_ts(latest_time)}")
-    if gold_warning:
-        lines.append(f"- Data warning: {gold_warning}")
-
-    lines.append("")
-    lines.append("## Progress Summary")
-    lines.append("")
-    lines.append(f"- Level range in tracked data: {level_start} -> {level_end}")
-    lines.append(f"- Levels gained in primary data: {levels_gained}")
-    lines.append(f"- Total tracked duration: {round(total_duration / 60, 1)} minutes")
-    lines.append(f"- Estimated levels/hour: {round(levels_per_hour, 2)}")
-
-    lines.append("")
-    lines.append("## Economy Summary")
-    lines.append("")
-    lines.append(f"- Raw net copper change: {total_gold_raw} ({copper_to_gold(total_gold_raw)})")
-    lines.append(f"- Raw gold/hour: {copper_to_gold(int(gold_per_hour_raw))}/hour")
-    if gift_events or gift_notes:
-        lines.append("- Gift notes/events detected: yes")
-        lines.append("- Gold/hour warning: gift income should be excluded from farming analysis.")
-    else:
-        lines.append("- Gift notes/events detected: no")
-
-    lines.append("")
-    lines.append("## Activity Summary")
-    lines.append("")
-    if activity_counts:
-        for name, count in sorted(activity_counts.items(), key=lambda item: item[0]):
-            lines.append(f"- {name}: {count}")
-    else:
-        lines.append("- No activity records.")
-    lines.append("")
-    lines.append(f"- City/setup activity ratio by activity events: {round(city_ratio, 1)}%")
-
-    lines.append("")
-    lines.append("## Important Notes")
-    lines.append("")
-    if notes:
-        for note in notes[-25:]:
-            t = format_ts(note.get("time"))
-            category = note.get("category", "general") or "general"
-            text = note.get("text", "")
-            lines.append(f"- {t} [{category}] {text}")
-    else:
-        lines.append("- No notes recorded.")
-
-    lines.append("")
-    lines.append("## Detected Operational Events")
-    lines.append("")
-    lines.append(f"- Structured events: {len(primary_events)}")
-    if event_counts:
-        for event_type, count in sorted(event_counts.items(), key=lambda item: item[0]):
-            lines.append(f"- {event_type}: {count}")
-    else:
-        lines.append("- No structured events recorded.")
-    lines.append(f"- Gift events: {len(gift_events)} structured, {len(gift_notes)} legacy notes")
-    lines.append(f"- Training events: {len(training_events)} structured, {len(training_notes)} legacy notes")
-    lines.append(f"- AH scan events: {len(ahscan_events)} structured, {len(ah_notes)} legacy notes")
-    lines.append(f"- Market notes: {len(market_events)} structured")
-
-    if primary_events:
-        lines.append("")
-        lines.append("### Recent Structured Events")
-        lines.append("")
-        for event in primary_events[-25:]:
-            t = format_ts(event.get("time"))
-            event_type = event.get("type", "unknown") or "unknown"
-            text = event.get("text", "")
-            gold = copper_to_gold(to_int(event.get("gold")))
-            activity = event.get("activity", "")
-            lines.append(f"- {t} [{event_type}] {text} ({gold}, {activity})")
-
-    lines.append("")
-    lines.append("## Recommendation")
-    lines.append("")
-    if latest_level < 12:
-        lines.append("- Continue Eversong Woods until around level 12.")
-        lines.append("- Keep activity as `questing` unless you intentionally switch to gathering/training/auction.")
-    elif latest_level < 20:
-        lines.append("- Move toward Ghostlands / Tranquillien and continue questing there.")
-        lines.append("- Gather nodes only if they are on-route or require minimal detour.")
-    else:
-        lines.append("- Continue the planned Horde leveling route and begin watching dungeon opportunities.")
-
-    lines.append("")
-    lines.append("## AI Review Questions")
-    lines.append("")
-    lines.append("- Was the latest session mostly questing or city setup?")
-    lines.append("- Did the gold change come from gameplay, training cost, AH, or gift?")
-    lines.append("- Which notes should become structured commands later?")
-    lines.append("- Is the next best step leveling, profession setup, AH, or travel?")
-
-    out_path.write_text("\n".join(lines), encoding="utf-8")
-    print(f"Report written to: {out_path}")
+    result = generate_report(Path(args.db), Path(args.out), report_date=args.date, timezone_name=args.timezone, character=args.character, realm=args.realm)
+    print(f"Report written: {Path(args.out).resolve()} ({result['date']} {result['timezone']})")
 
 
 if __name__ == "__main__":

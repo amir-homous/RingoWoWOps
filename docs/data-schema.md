@@ -1,202 +1,77 @@
-# Data Schema
+# Data schema
 
-## SavedVariables Root
+## Source SavedVariables
 
-The addon stores all persistent data inside a single SavedVariables
-table.
+Schema v3 root:
 
-Example structure:
+```text
+version = "0.3.0"
+schema_version = 3
+sessions
+snapshots
+notes
+activities
+events
+settings
+```
 
-    RingoWoWOpsDB = {
-      version = "0.2.2",
-      sessions = {},
-      snapshots = {},
-      notes = {},
-      activities = {},
-      events = {},
-      settings = {}
-    }
+Existing source fields remain compatible with v0.1/v0.2 data. New child records have `id` and optional `session_id`. Settings include default activity, ID sequence, primary realm when configured, and active-session recovery metadata.
 
-------------------------------------------------------------------------
+Money values captured from WoW are copper.
 
-## Sessions
+## Normalized exports
 
-A session starts with `/rwo start` and ends with `/rwo stop`.
+The parser produces:
 
-  Field              Type             Description
-  ------------------ ---------------- ---------------------------
-  id                 string           Unique session identifier
-  started_at         unix timestamp   Session start
-  ended_at           unix timestamp   Session end
-  duration_seconds   integer          Total duration
-  character          string           Character name
-  realm              string           Realm
-  faction            string           Horde / Alliance
-  class              string           WoW class token
-  level_start        integer          Starting level
-  level_end          integer          Ending level
-  zone_start         string           Starting zone
-  zone_end           string           Ending zone
-  xp_start           integer          XP at session start
-  xp_end             integer          XP at session end
-  gold_start         integer          Copper at start
-  gold_end           integer          Copper at end
-  activity_start     string           Initial activity
-  activity_end       string           Final activity
+- `sessions.csv`
+- `snapshots.csv`
+- `notes.csv`
+- `activities.csv`
+- `events.csv`
+- `validation_errors.csv`
+- `source_manifest.json`
 
-------------------------------------------------------------------------
+Every importable record has:
 
-## Snapshots
+- `record_id`
+- source schema version
+- source file SHA-256
+- source dataset/index
+- validation status
 
-Snapshots are lightweight point-in-time captures.
+Legacy records without IDs receive deterministic content-based compatibility IDs. Duplicate identical source rows remain separate through a deterministic duplicate ordinal. Original activity text is retained in `activity_original`; recognized aliases are stored canonically in `activity`.
 
-Fields:
+Invalid record types are retained in validation output as raw representations. Missing/incomplete fields generate inspectable warnings rather than silent deletion.
 
-  Field       Type
-  ----------- ------------------
-  time        unix timestamp
-  reason      string
-  character   string
-  realm       string
-  faction     string
-  class       string
-  level       integer
-  zone        string
-  subzone     string
-  xp          integer
-  xp_max      integer
-  rested_xp   integer
-  gold        integer (copper)
-  bags_free   integer
-  activity    string
+## SQLite schema v3
 
-------------------------------------------------------------------------
+Core tables:
 
-## Notes
+- `schema_metadata`
+- `migration_history`
+- `import_batches`
+- `source_identities`
+- `sessions`
+- `snapshots`
+- `notes`
+- `activities`
+- `events`
+- `validation_errors`
 
-Created with:
+Core records use typed columns and `record_id` primary keys. Source identities preserve exact character and realm strings and are never automatically merged. Child tables may reference a source session. Scope/time indexes support report queries.
 
-    /rwo note <text>
+Imports are transactional and use stable keys with `INSERT OR IGNORE`, making a repeated source import idempotent. Import batches are keyed by source hash and schema version. Validation errors also have deterministic unique keys.
 
-Typical usage:
+Before a database with an older `user_version` is migrated, the importer copies it to a timestamped `*.pre_migration_vN_*.sqlite` backup. Legacy pre-v2 tables are retained as `legacy_*_pre_v2` evidence. Failed transactions roll back; the backup remains available.
 
--   Auction House observations
--   LFG observations
--   Raid notes
--   Team notes
--   Farming ideas
--   Route problems
+No gold-ledger table exists in Phase 1.
 
-------------------------------------------------------------------------
+## Report semantics
 
-## Structured Events
+- Exact: captured point-in-time values.
+- Derived: calculations such as session duration and raw balance change.
+- Manual: player-entered notes/events.
+- Estimated: none in Phase 1.
+- Missing: classified income/expenses/transfers, inventory valuation, and profit/hour.
 
-Created with:
-
-    /rwo gift <amount> <source>
-    /rwo train <text>
-    /rwo ahscan <items_count>
-    /rwo market <text>
-
-Stored in:
-
-    RingoWoWOpsDB.events
-
-Fields:
-
-  Field          Type             Description
-  -------------- ---------------- ---------------------------
-  time           unix timestamp   Event time
-  character      string           Character name
-  realm          string           Realm
-  level          integer          Current level
-  zone           string           Current zone
-  type           string           gift, training, ahscan, market
-  text           string           Human-readable event text
-  details        string           Simple detail string
-  gold           integer          Current money in copper
-  activity       string           Current activity label
-  primary_realm  boolean          Whether row belongs to the primary realm
-
-These commands only record observations. They do not buy, sell, invite,
-whisper, move, fight, or perform protected gameplay actions.
-
-------------------------------------------------------------------------
-
-## Activities
-
-Created with:
-
-    /rwo activity <type>
-
-Supported activity types:
-
--   leveling
--   questing
--   grinding
--   mining
--   herbalism
--   dungeon
--   travel
--   training
--   auction
--   banking
--   team
--   raid
--   idle
--   other
-
-------------------------------------------------------------------------
-
-## Money
-
-All money is stored as copper.
-
-Examples:
-
--   10000 = 1 gold
--   100 = 1 silver
--   1 = 1 copper
-
-------------------------------------------------------------------------
-
-## MVP Analytics
-
-The first analytics engine should calculate:
-
--   Session duration
--   XP gained
--   Gold gained
--   XP/hour
--   Gold/hour
--   Zone history
--   Activity timeline
--   Notes timeline
-
-------------------------------------------------------------------------
-
-## Future Tables
-
-Planned future datasets:
-
--   Loot
--   Materials
--   Auction observations
--   Profession progress
--   Dungeon runs
--   Raid logs
--   Team roster
--   Market indicators
--   LFG demand signals
-
-------------------------------------------------------------------------
-
-## Design Goal
-
-The schema is intentionally simple.
-
-Raw gameplay data should remain unchanged.
-
-All calculations (XP/hour, Gold/hour, recommendations, AI summaries)
-should happen **outside the game** using Python and SQLite, keeping the
-addon lightweight and safe.
+Raw balance change must never be interpreted as profit.

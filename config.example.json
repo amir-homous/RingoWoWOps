@@ -1,10 +1,13 @@
 {
   "wow_path": "C:\\World of Warcraft",
   "wow_flavor": "_anniversary_",
-  "account": "469948984#2",
+  "account": "YOUR_ACCOUNT_FOLDER",
   "savedvariables_file": "RingoWoWOps.lua",
   "raw_output": "data\\raw\\RingoWoWOps.lua",
   "processed_dir": "data\\processed",
   "sqlite_db": "data\\ringo_ops.sqlite",
-  "daily_report": "data\\processed\\daily_report.md"
+  "daily_report": "data\\processed\\daily_report.md",
+  "report_timezone": "Asia/Tehran",
+  "report_character": null,
+  "report_realm": null
 }

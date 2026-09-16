@@ -2,7 +2,7 @@
 ## Title: RingoWoWOps
 ## Notes: AI-assisted session and activity logger for WoW Classic/TBC.
 ## Author: Amir Homous
-## Version: 0.1.0
+## Version: 0.3.0
 ## SavedVariables: RingoWoWOpsDB
 
 RingoWoWOps.lua

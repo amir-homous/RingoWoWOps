@@ -1,6 +1,9 @@
 # Python
 __pycache__/
-*.pyc
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 .venv/
 venv/
 
@@ -19,5 +22,16 @@ Thumbs.db
 # WoW SavedVariables / private logs
 *.bak
 *_private.lua
-data/*.sqlite 
-data/upload/ 
+data/*.sqlite
+*.pre_migration_*.sqlite*
+*.pre_phase1_*.sqlite*
+data/upload/
+RingoWoWOps_upload_*.zip
+
+# Local addon archives and backups
+addon/*.rar
+data/addon_backup_*/
+
+# Local configuration can contain WoW account identifiers.
+config.json
+config.local.json

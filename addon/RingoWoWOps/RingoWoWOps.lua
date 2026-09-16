@@ -1,6 +1,8 @@
 local ADDON_NAME = "RingoWoWOps"
+local ADDON_VERSION = "0.3.0"
+local SCHEMA_VERSION = 3
 
-RingoWoWOpsDB = RingoWoWOpsDB or {}
+RingoWoWOpsDB = RingoWoWOpsDB
 
 local function EnsureTable(name)
   if type(RingoWoWOpsDB[name]) ~= "table" then
@@ -10,20 +12,51 @@ local function EnsureTable(name)
   return RingoWoWOpsDB[name]
 end
 
-RingoWoWOpsDB.version = "0.2.2"
-EnsureTable("sessions")
-EnsureTable("snapshots")
-EnsureTable("notes")
-EnsureTable("activities")
-EnsureTable("events")
-EnsureTable("settings")
-
-RingoWoWOpsDB.settings.default_activity = RingoWoWOpsDB.settings.default_activity or "questing"
-RingoWoWOpsDB.settings.primary_realm = RingoWoWOpsDB.settings.primary_realm or nil
-
 local currentSession = nil
-local currentActivity = RingoWoWOpsDB.settings.default_activity or "questing"
+local currentActivity = "questing"
 local lastZone = nil
+
+local function initializeDatabase()
+  RingoWoWOpsDB = type(RingoWoWOpsDB) == "table" and RingoWoWOpsDB or {}
+
+  local migrations = {
+    function()
+      EnsureTable("sessions")
+      EnsureTable("snapshots")
+      EnsureTable("notes")
+      EnsureTable("activities")
+      EnsureTable("events")
+      EnsureTable("settings")
+    end,
+    function()
+      local settings = EnsureTable("settings")
+      settings.default_activity = settings.default_activity or "questing"
+      settings.next_record_sequence = tonumber(settings.next_record_sequence) or 1
+    end,
+    function()
+      local settings = EnsureTable("settings")
+      if settings.active_session_id == "" then
+        settings.active_session_id = nil
+      end
+    end
+  }
+
+  local currentSchema = tonumber(RingoWoWOpsDB.schema_version) or 0
+  for version = currentSchema + 1, SCHEMA_VERSION do
+    migrations[version]()
+    RingoWoWOpsDB.schema_version = version
+  end
+
+  -- Always validate containers without replacing existing tables or records.
+  EnsureTable("sessions")
+  EnsureTable("snapshots")
+  EnsureTable("notes")
+  EnsureTable("activities")
+  EnsureTable("events")
+  EnsureTable("settings")
+  RingoWoWOpsDB.version = ADDON_VERSION
+  currentActivity = RingoWoWOpsDB.settings.default_activity or "questing"
+end
 
 local function now()
   return time()
@@ -69,6 +102,13 @@ local function getRealm()
   return GetRealmName() or "Unknown"
 end
 
+local function newRecordID(kind)
+  local settings = EnsureTable("settings")
+  local sequence = tonumber(settings.next_record_sequence) or 1
+  settings.next_record_sequence = sequence + 1
+  return table.concat({ kind, tostring(now()), getCharacter(), getRealm(), tostring(sequence) }, "-")
+end
+
 local function getClass()
   local _, classFile = UnitClass("player")
   return classFile or "Unknown"
@@ -104,6 +144,8 @@ end
 
 local function snapshot(reason)
   local snap = {
+    id = newRecordID("snapshot"),
+    session_id = currentSession and currentSession.id or nil,
     time = now(),
     reason = reason or "manual",
     character = getCharacter(),
@@ -128,6 +170,8 @@ end
 
 local function addActivityRecord(activity, source)
   table.insert(EnsureTable("activities"), {
+    id = newRecordID("activity"),
+    session_id = currentSession and currentSession.id or nil,
     time = now(),
     character = getCharacter(),
     realm = getRealm(),
@@ -141,6 +185,8 @@ end
 
 local function addStructuredEvent(eventType, text, details)
   table.insert(EnsureTable("events"), {
+    id = newRecordID("event"),
+    session_id = currentSession and currentSession.id or nil,
     time = now(),
     character = getCharacter(),
     realm = getRealm(),
@@ -206,10 +252,8 @@ local function startSession(source)
     currentActivity = RingoWoWOpsDB.settings.default_activity or "questing"
   end
 
-  snapshot(source == "auto" and "auto_session_start" or "session_start")
-
   currentSession = {
-    id = tostring(now()) .. "-" .. getCharacter(),
+    id = newRecordID("session"),
     status = "running",
     started_at = now(),
     ended_at = nil,
@@ -227,6 +271,8 @@ local function startSession(source)
   }
 
   table.insert(EnsureTable("sessions"), currentSession)
+  RingoWoWOpsDB.settings.active_session_id = currentSession.id
+  snapshot(source == "auto" and "auto_session_start" or "session_start")
   addActivityRecord(currentActivity, source == "auto" and "auto_session_start" or "session_start")
 
   if source == "auto" then
@@ -266,6 +312,7 @@ local function stopSession(source)
   end
 
   currentSession = nil
+  RingoWoWOpsDB.settings.active_session_id = nil
 end
 
 local function detectNoteCategory(text)
@@ -306,6 +353,8 @@ local function addNote(text)
   end
 
   table.insert(EnsureTable("notes"), {
+    id = newRecordID("note"),
+    session_id = currentSession and currentSession.id or nil,
     time = now(),
     character = getCharacter(),
     realm = getRealm(),
@@ -384,6 +433,137 @@ local function status()
   print("Events: " .. tostring(#EnsureTable("events")))
 end
 
+local uiFrame = nil
+
+local function refreshUI()
+  if not uiFrame then
+    return
+  end
+
+  uiFrame.characterText:SetText("Character: " .. getCharacter())
+  uiFrame.levelText:SetText("Level: " .. tostring(getLevel()))
+  uiFrame.zoneText:SetText("Zone: " .. getZone())
+  uiFrame.activityText:SetText("Activity: " .. tostring(currentActivity))
+  uiFrame.sessionText:SetText("Session: " .. (currentSession and "running" or "not running"))
+end
+
+local function createLabel(parent, text, x, y)
+  local label = parent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  label:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
+  label:SetText(text)
+  label:SetJustifyH("LEFT")
+  return label
+end
+
+local function createButton(parent, text, width, height, x, y, onClick)
+  local button = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
+  button:SetSize(width, height)
+  button:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
+  button:SetText(text)
+  button:SetScript("OnClick", function()
+    onClick()
+    refreshUI()
+  end)
+  return button
+end
+
+local function createInput(parent, x, y, width)
+  local input = CreateFrame("EditBox", nil, parent, "InputBoxTemplate")
+  input:SetSize(width, 22)
+  input:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
+  input:SetAutoFocus(false)
+  input:SetScript("OnEnterPressed", function(self)
+    self:ClearFocus()
+  end)
+  input:SetScript("OnEscapePressed", function(self)
+    self:ClearFocus()
+  end)
+  return input
+end
+
+local function createUI()
+  if uiFrame then
+    return uiFrame
+  end
+
+  local backdropTemplate = BackdropTemplateMixin and "BackdropTemplate" or nil
+  local frame = CreateFrame("Frame", "RingoWoWOpsMiniPanel", UIParent, backdropTemplate)
+  frame:SetSize(250, 275)
+  frame:SetPoint("CENTER")
+  frame:SetMovable(true)
+  frame:EnableMouse(true)
+  frame:RegisterForDrag("LeftButton")
+  frame:SetClampedToScreen(true)
+  frame:SetScript("OnDragStart", frame.StartMoving)
+  frame:SetScript("OnDragStop", frame.StopMovingOrSizing)
+  if frame.SetBackdrop then
+    frame:SetBackdrop({
+      bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+      edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+      tile = true,
+      tileSize = 32,
+      edgeSize = 16,
+      insets = { left = 4, right = 4, top = 4, bottom = 4 }
+    })
+  end
+  frame:Hide()
+
+  local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  title:SetPoint("TOPLEFT", frame, "TOPLEFT", 12, -10)
+  title:SetText("RingoWoWOps")
+
+  local closeButton = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
+  closeButton:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -4, -4)
+
+  frame.characterText = createLabel(frame, "Character:", 12, -34)
+  frame.levelText = createLabel(frame, "Level:", 12, -50)
+  frame.zoneText = createLabel(frame, "Zone:", 12, -66)
+  frame.activityText = createLabel(frame, "Activity:", 12, -82)
+  frame.sessionText = createLabel(frame, "Session:", 12, -98)
+
+  createButton(frame, "Status", 70, 22, 12, -122, status)
+  createButton(frame, "Snap", 70, 22, 88, -122, function()
+    snapshot("ui")
+    printMsg("Snapshot saved.")
+  end)
+
+  createButton(frame, "Questing", 70, 22, 12, -150, function() setActivity("questing") end)
+  createButton(frame, "Training", 70, 22, 88, -150, function() setActivity("training") end)
+  createButton(frame, "Auction", 70, 22, 164, -150, function() setActivity("auction") end)
+  createButton(frame, "Gathering", 70, 22, 12, -178, function() setActivity("gathering") end)
+  createButton(frame, "Dungeon", 70, 22, 88, -178, function() setActivity("dungeon") end)
+
+  createLabel(frame, "Quick note", 12, -207)
+  frame.noteInput = createInput(frame, 82, -202, 90)
+  createButton(frame, "Save Note", 65, 22, 176, -202, function()
+    local text = frame.noteInput:GetText()
+    addNote(text)
+    frame.noteInput:SetText("")
+  end)
+
+  createLabel(frame, "Market", 12, -235)
+  frame.marketInput = createInput(frame, 82, -230, 90)
+  createButton(frame, "Save Market", 65, 22, 176, -230, function()
+    local text = frame.marketInput:GetText()
+    addMarketEvent(text)
+    frame.marketInput:SetText("")
+  end)
+
+  uiFrame = frame
+  refreshUI()
+  return uiFrame
+end
+
+local function toggleUI()
+  local frame = createUI()
+  if frame:IsShown() then
+    frame:Hide()
+  else
+    refreshUI()
+    frame:Show()
+  end
+end
+
 SLASH_RINGOWOWOPS1 = "/rwo"
 SlashCmdList["RINGOWOWOPS"] = function(msg)
   local command, rest = msg:match("^(%S*)%s*(.-)$")
@@ -398,6 +578,8 @@ SlashCmdList["RINGOWOWOPS"] = function(msg)
     stopSession("manual")
   elseif command == "status" then
     status()
+  elseif command == "ui" then
+    toggleUI()
   elseif command == "note" then
     addNote(rest)
   elseif command == "gift" then
@@ -415,21 +597,45 @@ SlashCmdList["RINGOWOWOPS"] = function(msg)
   elseif command == "realm" then
     setPrimaryRealm(rest)
   else
-    printMsg("Commands: start, snap, stop, status, note <text>, gift <amount> <source>, train <text>, ahscan <items_count>, market <text>, activity <type>, default <activity>, realm [name]")
+    printMsg("Commands: start, snap, stop, status, ui, note <text>, gift <amount> <source>, train <text>, ahscan <items_count>, market <text>, activity <type>, default <activity>, realm [name]")
   end
 end
 
 local eventFrame = CreateFrame("Frame")
 
+eventFrame:RegisterEvent("ADDON_LOADED")
 eventFrame:RegisterEvent("PLAYER_LOGIN")
 eventFrame:RegisterEvent("PLAYER_LOGOUT")
 eventFrame:RegisterEvent("PLAYER_LEVEL_UP")
 eventFrame:RegisterEvent("ZONE_CHANGED_NEW_AREA")
 
 eventFrame:SetScript("OnEvent", function(_, event, ...)
-  if event == "PLAYER_LOGIN" then
+  if event == "ADDON_LOADED" then
+    local loadedAddon = ...
+    if loadedAddon ~= ADDON_NAME then
+      return
+    end
+    initializeDatabase()
+
+  elseif event == "PLAYER_LOGIN" then
+    initializeDatabase()
     lastZone = getZone()
     currentActivity = RingoWoWOpsDB.settings.default_activity or "questing"
+
+    -- A persisted active ID means WoW did not complete the prior logout path.
+    -- Preserve that session as incomplete; never invent a crash end time.
+    local interruptedID = RingoWoWOpsDB.settings.active_session_id
+    if interruptedID then
+      for _, session in ipairs(EnsureTable("sessions")) do
+        if session.id == interruptedID and session.status == "running" then
+          session.status = "incomplete"
+          session.recovery_detected_at = now()
+          session.recovery_reason = "login_after_unclean_shutdown"
+          break
+        end
+      end
+      RingoWoWOpsDB.settings.active_session_id = nil
+    end
     startSession("auto")
 
   elseif event == "PLAYER_LOGOUT" then
@@ -447,6 +653,8 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
       printMsg("Auto snapshot saved: zone change.")
     end
   end
+
+  refreshUI()
 end)
 
-printMsg("Loaded v0.2.2. Auto session enabled. Default activity: " .. currentActivity)
+printMsg("Loaded v" .. ADDON_VERSION .. ". Auto session enabled.")
