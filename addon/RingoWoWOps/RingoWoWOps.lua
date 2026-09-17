@@ -1,6 +1,6 @@
 local ADDON_NAME = "RingoWoWOps"
-local ADDON_VERSION = "0.4.0"
-local SCHEMA_VERSION = 4
+local ADDON_VERSION = "0.5.0"
+local SCHEMA_VERSION = 5
 
 RingoWoWOpsDB = RingoWoWOpsDB
 
@@ -42,6 +42,12 @@ local function initializeDatabase()
     function()
       EnsureTable("ledger_entries")
       EnsureTable("ledger_voids")
+    end,
+    function()
+      EnsureTable("farm_runs")
+      EnsureTable("farm_run_events")
+      EnsureTable("farm_settings")
+      EnsureTable("active_farm_run")
     end
   }
 
@@ -740,6 +746,13 @@ local function toggleUI()
   end
 end
 
+local function initializeFarm()
+  if RingoWoWOpsFarm then
+    RingoWoWOpsFarm.Initialize({now=now, id=newRecordID, character=getCharacter, realm=getRealm,
+      session=function() return currentSession and currentSession.id or nil end, message=printMsg})
+  end
+end
+
 SLASH_RINGOWOWOPS1 = "/rwo"
 SlashCmdList["RINGOWOWOPS"] = function(msg)
   local command, rest = msg:match("^(%S*)%s*(.-)$")
@@ -758,7 +771,11 @@ SlashCmdList["RINGOWOWOPS"] = function(msg)
     stopSession("manual")
   elseif command == "status" then
     status()
+  elseif command == "farm" then
+    if RingoWoWOpsFarm then RingoWoWOpsFarm.Command(rest) end
   elseif command == "ui" then
+    if RingoWoWOpsFarmDashboard then RingoWoWOpsFarmDashboard.Toggle() else toggleUI() end
+  elseif command == "mini" then
     toggleUI()
   elseif command == "note" then
     addNote(rest)
@@ -777,7 +794,9 @@ SlashCmdList["RINGOWOWOPS"] = function(msg)
   elseif command == "realm" then
     setPrimaryRealm(rest)
   else
-    printMsg("Commands: ledger help, income, expense, transfer, giftin, giftout, start, snap, stop, status, ui, note <text>, gift <amount> <source>, train <text>, ahscan <items_count>, market <text>, activity <type>, default <activity>, realm [name]")
+    printMsg("Farm: ui / farm (dashboard), farm help; mini (classic panel).")
+    printMsg("Ledger: ledger help, income, expense, transfer, giftin, giftout.")
+    printMsg("Session: start, stop, snap, status, activity, note; legacy: gift, train, ahscan, market; settings: default, realm.")
   end
 end
 
@@ -785,6 +804,7 @@ local eventFrame = CreateFrame("Frame")
 
 eventFrame:RegisterEvent("ADDON_LOADED")
 eventFrame:RegisterEvent("PLAYER_LOGIN")
+eventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
 eventFrame:RegisterEvent("PLAYER_LOGOUT")
 eventFrame:RegisterEvent("PLAYER_LEVEL_UP")
 eventFrame:RegisterEvent("ZONE_CHANGED_NEW_AREA")
@@ -796,6 +816,7 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
       return
     end
     initializeDatabase()
+    initializeFarm()
 
   elseif event == "PLAYER_LOGIN" then
     initializeDatabase()
@@ -817,8 +838,20 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
       RingoWoWOpsDB.settings.active_session_id = nil
     end
     startSession("auto")
+    initializeFarm()
+
+  elseif event == "PLAYER_ENTERING_WORLD" then
+    local _, isReload = ...
+    if RingoWoWOpsFarm then
+      if not RingoWoWOpsFarm.recovered then
+        RingoWoWOpsFarm.Recover(isReload)
+        RingoWoWOpsFarm.recovered=true
+      end
+      RingoWoWOpsFarm.ObserveContext()
+    end
 
   elseif event == "PLAYER_LOGOUT" then
+    if RingoWoWOpsFarm then RingoWoWOpsFarm.Logout() end
     stopSession("auto")
 
   elseif event == "PLAYER_LEVEL_UP" then
@@ -826,6 +859,7 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
     printMsg("Auto snapshot saved: level up.")
 
   elseif event == "ZONE_CHANGED_NEW_AREA" then
+    if RingoWoWOpsFarm then RingoWoWOpsFarm.ObserveContext() end
     local zone = getZone()
     if zone ~= "" and zone ~= lastZone then
       lastZone = zone

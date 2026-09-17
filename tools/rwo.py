@@ -98,13 +98,13 @@ def database_status(path: Path) -> str:
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         migrations = conn.execute("SELECT count(*) FROM migration_history").fetchone()[0] if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='migration_history'").fetchone() else 0
         counts = {table: conn.execute(f'SELECT count(*) FROM {table}').fetchone()[0]
-                  for table in ('ledger_entries','ledger_voids')
+                  for table in ('ledger_entries','ledger_voids','farm_runs','farm_run_events')
                   if conn.execute("SELECT 1 FROM sqlite_master WHERE name=?",(table,)).fetchone()}
         conn.close()
         if version > SCHEMA_VERSION:
             return f"ERROR - schema v{version} is newer than supported v{SCHEMA_VERSION}"
         state = 'OK' if version == SCHEMA_VERSION else 'MIGRATION REQUIRED'
-        return f"{state} - schema v{version}, target v{SCHEMA_VERSION}, {migrations} migration record(s), ledger counts {counts}"
+        return f"{state} - schema v{version}, target v{SCHEMA_VERSION}, {migrations} migration record(s), domain counts {counts}"
     except sqlite3.Error as exc:
         return f"ERROR - {exc}"
 
@@ -150,7 +150,7 @@ def make_upload_zip(config: dict) -> None:
                 included.append({
                     "path": arcname,
                     "size": file.stat().st_size,
-                    "privacy": "private_raw_savedvariables" if is_raw_savedvariables else "private_financial_history" if file.stem in ("ledger_entries", "ledger_voids") else "may_contain_private_history",
+                    "privacy": "private_raw_savedvariables" if is_raw_savedvariables else "private_financial_history" if file.stem in ("ledger_entries", "ledger_voids") else "private_farm_history" if file.stem in ("farm_runs", "farm_run_events") else "may_contain_private_history",
                 })
         upload_manifest = {
             "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),

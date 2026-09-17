@@ -2,6 +2,7 @@ import argparse
 import sqlite3
 import json
 from ledger_report import economy, render_economy
+import farm
 from datetime import date, datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -94,6 +95,7 @@ def generate_report(
         ledger_entries = _rows(conn, "ledger_entries", "time", start_ts, end_ts + 1, character, realm)
         observations = _rows(conn, "snapshots", "time", start_ts, end_ts + 1, character, realm)
         void_ids = {r[0] for r in conn.execute("SELECT entry_id FROM ledger_voids")} if _table_exists(conn,"ledger_voids") else set()
+        farm_summary = farm.summarize(farm.current_runs(conn),start_ts,end_ts,character,realm)
         findings = []
         if _table_exists(conn,"validation_errors"):
             findings = [dict(r) for r in conn.execute("SELECT record_id,raw_record FROM validation_errors WHERE dataset IN ('ledger_entries','ledger_voids') AND severity='error'")]
@@ -101,7 +103,7 @@ def generate_report(
     finally:
         conn.close()
 
-    identities = sorted({(row.get("character") or "", row.get("realm") or "") for rows in (sessions, snapshots, notes, activities, events, ledger_entries, observations) for row in rows})
+    identities = sorted({(row.get("character") or "", row.get("realm") or "") for rows in (sessions, snapshots, notes, activities, events, ledger_entries, observations, farm_summary["rows"]) for row in rows})
     if not character and len({name for name, _ in identities if name}) > 1:
         names = ", ".join(name for name, _ in identities)
         raise ValueError(f"Report scope contains multiple characters ({names}); specify --character")
@@ -155,6 +157,7 @@ def generate_report(
         f"- Incomplete sessions started in scope: {len(incomplete)}",
         f"- Derived tracked duration: {round(total_duration / 60, 1)} minutes", "",
         *render_economy(econ, copper_to_gold, fmt_ts),
+        *farm.render(farm_summary, copper_to_gold, fmt_ts),
         "## Activity Records", "",
     ]
     counts = {}
@@ -180,7 +183,7 @@ def generate_report(
     ])
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return {"economy": econ, "date": selected.isoformat(), "timezone": timezone_name, "identities": identities, "counts": {"sessions": len(sessions), "snapshots": len(snapshots), "notes": len(notes), "activities": len(activities), "events": len(events), "ledger_entries": len(econ["active"]) + len(econ["voided"]), "ledger_voids": len(econ["voided"])}}
+    return {"farm": farm_summary, "economy": econ, "date": selected.isoformat(), "timezone": timezone_name, "identities": identities, "counts": {"sessions": len(sessions), "snapshots": len(snapshots), "notes": len(notes), "activities": len(activities), "events": len(events), "ledger_entries": len(econ["active"]) + len(econ["voided"]), "ledger_voids": len(econ["voided"])}}
 
 
 def main():

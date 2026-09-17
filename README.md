@@ -29,9 +29,10 @@ Historical leveling use cases remain supported, but recommendations must eventua
 
 ## Current status
 
-Phase 1 is complete; Phase 2A manual cash ledger is implemented and user-validated in WoW:
+Phases 1 and 2A are runtime-verified. Phase 3A Farm Run Core and native dashboard are implemented in source, awaiting WoW validation:
 
-- addon schema v4 / addon v0.4.0; SQLite schema v4 / ledger record schema v1
+- addon schema v5 / addon v0.5.0; SQLite schema v5 / ledger and farm record schemas v1
+- preset-ready Stratholme farm lifecycle, immutable transition evidence, Live Run / History / Settings dashboard
 - manual cash entries, append-only voids, strict copper syntax and conservative reconciliation
 - sessions, snapshots, notes, activities, and structured events
 - deterministic compatibility IDs for legacy records
@@ -41,7 +42,7 @@ Phase 1 is complete; Phase 2A manual cash ledger is implemented and user-validat
 - calendar-day reports with timezone, character, and realm scope
 - standard-library `unittest` coverage plus an end-to-end fixture
 
-See [the Gold Ledger guide](docs/gold-ledger.md) for commands, deployment and the manual runtime checklist. Advanced profitability, dashboard, raid operations, guild systems, and AI recommendations remain deferred.
+See [the Farm Dashboard guide](docs/farm-dashboard.md) for Phase 3A deployment and runtime checks. The original panel remains at `/rwo mini`. See [the Gold Ledger guide](docs/gold-ledger.md) for commands, deployment and the manual runtime checklist. Advanced profitability, dashboard, raid operations, guild systems, and AI recommendations remain deferred.
 
 ## Data flow
 
@@ -93,6 +94,9 @@ See [docs/cli.md](docs/cli.md) for configuration and report-scope details.
 /rwo ledger help
 /rwo ledger recent
 /rwo ledger undo <short-id>
+/rwo farm
+/rwo farm status
+/rwo mini
 /rwo status
 /rwo start
 /rwo snap

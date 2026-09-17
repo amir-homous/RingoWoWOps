@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT / 'tools'))
 from ledger import parse_money, normalize_ledger
 from ledger_report import economy, totals, render_economy
 from parse_savedvariables import export_normalized, lua_table_to_py, write_csv
-from import_to_sqlite import import_directory, apply_migrations
+from import_to_sqlite import import_directory, apply_migrations, SCHEMA_VERSION
 import import_to_sqlite as importer
 from generate_daily_report import generate_report, report_window
 import rwo
@@ -143,7 +143,7 @@ class LedgerTests(unittest.TestCase):
         lua = self.addon()
         lua.execute("RingoWoWOpsDB.schema_version=3; RingoWoWOpsDB.settings.next_record_sequence=42")
         lua.execute("frames[#frames].OnEvent(nil,'ADDON_LOADED','RingoWoWOps')")
-        self.assertEqual(lua.globals().RingoWoWOpsDB.schema_version,4)
+        self.assertEqual(lua.globals().RingoWoWOpsDB.schema_version,5)
         self.assertEqual(lua.globals().RingoWoWOpsDB.settings.next_record_sequence,42)
         self.command(lua,'gift 250 Friend')
         self.command(lua,'train ambiguous training text')
@@ -260,7 +260,7 @@ class LedgerTests(unittest.TestCase):
         self.assertTrue(Path(first['backup']).exists())
         self.assertIsNone(import_directory(out,db)['backup'])
         with closing(sqlite3.connect(db)) as conn:
-            self.assertEqual(conn.execute('PRAGMA user_version').fetchone()[0],4)
+            self.assertEqual(conn.execute('PRAGMA user_version').fetchone()[0],SCHEMA_VERSION)
             self.assertEqual(conn.execute('PRAGMA foreign_key_check').fetchall(),[])
 
     def test_failed_batch_rolls_back_and_newer_schema_rejected(self):
@@ -275,7 +275,7 @@ class LedgerTests(unittest.TestCase):
         with closing(sqlite3.connect(db)) as conn:
             self.assertEqual(conn.execute('SELECT count(*) FROM ledger_entries').fetchone()[0],0)
             self.assertEqual(conn.execute('SELECT count(*) FROM import_batches').fetchone()[0],0)
-            conn.execute('PRAGMA user_version=5'); conn.commit()
+            conn.execute(f'PRAGMA user_version={SCHEMA_VERSION+1}'); conn.commit()
         with self.assertRaisesRegex(RuntimeError,'newer'): import_directory(out,db)
 
     def test_parser_preserves_malformed_and_conflicts(self):

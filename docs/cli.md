@@ -62,3 +62,20 @@ python tools\generate_daily_report.py --date 2026-09-17 --end-date 2026-09-19 --
 Stored Unix timestamps remain unchanged. Requested-window totals and actual
 observed-interval reconciliation are separate. Boundary ties require review;
 insufficient or partial observations do not become fictional balances.
+
+## Phase 3A farm imports and reports
+
+`update` also exports/imports `farm_runs.csv` and `farm_run_events.csv`; no farm CLI
+writer is added. `doctor` reports farm run/event counts and the v5 migration target.
+First v4-to-v5 import creates a unique pre-migration backup. Current run summaries
+are projections of immutable headers/events, not overwritten source records.
+
+The Farm Runs report section uses configured timezone/date/character/realm scope.
+Completed duration summaries and Raw gold change use only completed runs; missing
+balances are reported as unobserved. Incomplete and abandoned counts are separate.
+No rate or automatic ledger classification is generated. The in-game fixed-offset
+day setting must be aligned manually with the report timezone; config.json is not
+read by WoW or modified by the addon.
+
+Local ZIP manifests label both farm CSVs `private_farm_history`. Upload remains
+local-only. See [farm-dashboard.md](farm-dashboard.md) for deployment and recovery.

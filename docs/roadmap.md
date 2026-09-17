@@ -35,9 +35,18 @@ Manual/backdated CLI entries, legacy candidate review, transfer linking, control
 adjustments and any ledger entry UI require a separate approved implementation.
 Account-wide aggregation and inventory valuation remain deferred as well.
 
-## Phase 3 — Structured activities and runs
+## Phase 3A - Farm Run Core and native dashboard
 
-Planned. Add extensible farm/dungeon/run records and link them to ledger entries and sessions.
+Implemented in source; v0.5.0 WoW validation pending. Stratholme preset, immutable
+headers/events, validated lifecycle, reload/recovery, native Live Run / History /
+Settings, schema v5 pipeline and scoped Raw gold change summaries. Existing ledger
+and compact UI remain available. See [farm-dashboard.md](farm-dashboard.md).
+
+## Phase 3B - Farm operations (deferred)
+
+Buyer/payment/recruitment, loot/vendor/DE attribution, run-linked ledger economics,
+AH/TSM, rates and specialized Botanica/Shadow Lab workflows are not implemented.
+No automatic gameplay, reset, group or chat actions are introduced.
 
 ## Phase 4 — Professions and services
 
