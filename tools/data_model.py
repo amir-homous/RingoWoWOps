@@ -7,7 +7,8 @@ import json
 from typing import Any
 
 
-DATASETS = ("sessions", "snapshots", "notes", "activities", "events")
+PHASE1_DATASETS = ("sessions", "snapshots", "notes", "activities", "events")
+DATASETS = PHASE1_DATASETS + ("ledger_entries", "ledger_voids")
 
 ACTIVITY_ALIASES = {
     "quest": "questing",

@@ -1,5 +1,7 @@
 import argparse
 import sqlite3
+import json
+from ledger_report import economy, render_economy
 from datetime import date, datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -73,8 +75,13 @@ def generate_report(
     timezone_name: str = "UTC",
     character: str | None = None,
     realm: str | None = None,
+    end_date: str | None = None,
 ) -> dict:
     selected, start_ts, end_ts, tz = report_window(report_date, timezone_name)
+    if end_date:
+        _, end_ts, _, _ = report_window(end_date, timezone_name)
+        if end_ts <= start_ts:
+            raise ValueError("--end-date is exclusive and must follow --date")
     uri = f"file:{db_path.resolve().as_posix()}?mode=ro"
     conn = sqlite3.connect(uri, uri=True)
     conn.row_factory = sqlite3.Row
@@ -84,10 +91,17 @@ def generate_report(
         notes = _rows(conn, "notes", "time", start_ts, end_ts, character, realm)
         activities = _rows(conn, "activities", "time", start_ts, end_ts, character, realm)
         events = _rows(conn, "events", "time", start_ts, end_ts, character, realm)
+        ledger_entries = _rows(conn, "ledger_entries", "time", start_ts, end_ts + 1, character, realm)
+        observations = _rows(conn, "snapshots", "time", start_ts, end_ts + 1, character, realm)
+        void_ids = {r[0] for r in conn.execute("SELECT entry_id FROM ledger_voids")} if _table_exists(conn,"ledger_voids") else set()
+        findings = []
+        if _table_exists(conn,"validation_errors"):
+            findings = [dict(r) for r in conn.execute("SELECT record_id,raw_record FROM validation_errors WHERE dataset IN ('ledger_entries','ledger_voids') AND severity='error'")]
+
     finally:
         conn.close()
 
-    identities = sorted({(row.get("character") or "", row.get("realm") or "") for rows in (sessions, snapshots, notes, activities, events) for row in rows})
+    identities = sorted({(row.get("character") or "", row.get("realm") or "") for rows in (sessions, snapshots, notes, activities, events, ledger_entries, observations) for row in rows})
     if not character and len({name for name, _ in identities if name}) > 1:
         names = ", ".join(name for name, _ in identities)
         raise ValueError(f"Report scope contains multiple characters ({names}); specify --character")
@@ -95,10 +109,24 @@ def generate_report(
         names = ", ".join(name for _, name in identities)
         raise ValueError(f"Report scope contains multiple realms ({names}); specify --realm")
 
+    review = False
+    for finding in findings:
+        if any(r['record_id'] == finding['record_id'] for r in ledger_entries):
+            review = True
+        try:
+            raw = json.loads(finding['raw_record'] or '{}')
+            if isinstance(raw, dict) and any(r['record_id'] == raw.get('entry_id') for r in ledger_entries):
+                review = True
+            if isinstance(raw, dict) and (not character or raw.get('character') == character) and (not realm or raw.get('realm') == realm):
+                when = int(raw.get('time', -1))
+                review |= start_ts <= when < end_ts
+        except (TypeError, ValueError):
+            pass
+    econ = economy(ledger_entries, observations, void_ids, start_ts, end_ts, review)
+
     complete = [row for row in sessions if row.get("ended_at") is not None and row.get("duration_seconds") is not None and row.get("status") in ("completed", "")]
     incomplete = [row for row in sessions if row not in complete]
     total_duration = sum(to_int(row.get("duration_seconds")) for row in complete)
-    raw_balance_change = sum(to_int(row.get("gold_end")) - to_int(row.get("gold_start")) for row in complete)
     latest = snapshots[-1] if snapshots else {}
 
     def fmt_ts(value):
@@ -107,8 +135,10 @@ def generate_report(
     lines = [
         "# RingoWoWOps Daily Report", "",
         "## Report Scope", "",
-        f"- Window type: Calendar day",
+        f"- Window type: {'Selected date range' if end_date else 'Calendar day'}",
         f"- Date: {selected.isoformat()}",
+        f"- Exclusive end date: {end_date or datetime.fromtimestamp(end_ts, tz).date().isoformat()}",
+        f"- Resolved identity: {identities[0][0]}@{identities[0][1]}" if len(identities) == 1 else "- Resolved identity: no observations or records",
         f"- Timezone: {timezone_name}",
         f"- Character filter: {character or 'auto (single-character scope required)'}",
         f"- Realm filter: {realm or 'auto (single-realm scope required)'}",
@@ -124,10 +154,7 @@ def generate_report(
         f"- Completed sessions started in scope: {len(complete)}",
         f"- Incomplete sessions started in scope: {len(incomplete)}",
         f"- Derived tracked duration: {round(total_duration / 60, 1)} minutes", "",
-        "## Money Data", "",
-        f"- Derived raw balance change: {copper_to_gold(raw_balance_change)} ({raw_balance_change} copper)",
-        "- Interpretation: Raw balance change is not profit and may include transfers, gifts, purchases, repairs, training, or other unclassified movements.",
-        "- Estimated profit: Missing; the Phase 2 ledger is not implemented.", "",
+        *render_economy(econ, copper_to_gold, fmt_ts),
         "## Activity Records", "",
     ]
     counts = {}
@@ -144,16 +171,16 @@ def generate_report(
         "- Exact: timestamps and point-in-time game-state observations captured by the addon.",
         "- Derived: durations and raw balance changes calculated from captured values.",
         "- Manual: notes and structured events entered by the player.",
-        "- Estimated: no economic estimates are produced in Phase 1.",
-        "- Missing: classified income, expenses, transfers, inventory value, and reliable profit/hour.",
+        "- Estimated: explicitly marked ledger amounts and player material costs remain separate.",
+        "- Missing: inventory valuation and attributable activity profitability.",
         f"- Records in scope: {len(sessions)} sessions, {len(snapshots)} snapshots, {len(notes)} notes, {len(activities)} activities, {len(events)} events.",
         "", "## Neutral Next Step", "",
         "- Review incomplete sessions and validation warnings before interpreting trends.",
-        "- Use raw balance movement only as a reconciliation signal until the Phase 2 ledger exists.",
+        "- Review ledger omissions and observation coverage before interpreting cash totals.",
     ])
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return {"date": selected.isoformat(), "timezone": timezone_name, "identities": identities, "counts": {"sessions": len(sessions), "snapshots": len(snapshots), "notes": len(notes), "activities": len(activities), "events": len(events)}}
+    return {"economy": econ, "date": selected.isoformat(), "timezone": timezone_name, "identities": identities, "counts": {"sessions": len(sessions), "snapshots": len(snapshots), "notes": len(notes), "activities": len(activities), "events": len(events), "ledger_entries": len(econ["active"]) + len(econ["voided"]), "ledger_voids": len(econ["voided"])}}
 
 
 def main():
@@ -161,11 +188,12 @@ def main():
     parser.add_argument("--db", default="data/ringo_ops.sqlite")
     parser.add_argument("--out", default="data/processed/daily_report.md")
     parser.add_argument("--date", help="Calendar date in YYYY-MM-DD; defaults to today in --timezone")
+    parser.add_argument("--end-date", help="Exclusive end calendar date for a selected range")
     parser.add_argument("--timezone", default="UTC", help="IANA timezone name")
     parser.add_argument("--character")
     parser.add_argument("--realm")
     args = parser.parse_args()
-    result = generate_report(Path(args.db), Path(args.out), report_date=args.date, timezone_name=args.timezone, character=args.character, realm=args.realm)
+    result = generate_report(Path(args.db), Path(args.out), report_date=args.date, timezone_name=args.timezone, character=args.character, realm=args.realm, end_date=args.end_date)
     print(f"Report written: {Path(args.out).resolve()} ({result['date']} {result['timezone']})")
 
 

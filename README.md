@@ -29,9 +29,10 @@ Historical leveling use cases remain supported, but recommendations must eventua
 
 ## Current status
 
-Phase 1 data integrity is implemented:
+Phase 1 is complete; Phase 2A manual cash ledger is implemented and user-validated in WoW:
 
-- addon schema v3 / addon v0.3.0
+- addon schema v4 / addon v0.4.0; SQLite schema v4 / ledger record schema v1
+- manual cash entries, append-only voids, strict copper syntax and conservative reconciliation
 - sessions, snapshots, notes, activities, and structured events
 - deterministic compatibility IDs for legacy records
 - validation output and source provenance
@@ -40,7 +41,7 @@ Phase 1 data integrity is implemented:
 - calendar-day reports with timezone, character, and realm scope
 - standard-library `unittest` coverage plus an end-to-end fixture
 
-Gold ledger, profit analysis, dashboard, raid operations, guild systems, and AI recommendations are not implemented.
+See [the Gold Ledger guide](docs/gold-ledger.md) for commands, deployment and the manual runtime checklist. Advanced profitability, dashboard, raid operations, guild systems, and AI recommendations remain deferred.
 
 ## Data flow
 
@@ -84,6 +85,14 @@ See [docs/cli.md](docs/cli.md) for configuration and report-scope details.
 ## Addon commands
 
 ```text
+/rwo income <amount> <category> [note]
+/rwo expense <amount> <category> [note]
+/rwo transfer <in|out> <amount> <counterparty> [note]
+/rwo giftin <amount> <counterparty> [note]
+/rwo giftout <amount> <counterparty> [note]
+/rwo ledger help
+/rwo ledger recent
+/rwo ledger undo <short-id>
 /rwo status
 /rwo start
 /rwo snap
@@ -119,13 +128,13 @@ Tests use sanitized fictional identities and notes.
 
 The current report is a calendar-day report, not a server-reset or weekly-reset report. Its timezone is configured with `report_timezone` and defaults in `config.example.json` to `Asia/Tehran`. Optional `report_character` and `report_realm` filters prevent unrelated identities from being combined. If an unfiltered day contains multiple characters or realms, report generation stops with an actionable error.
 
-Raw balance change is a derived reconciliation signal, not profit. Classified profit and profit/hour belong to the future Phase 2 gold ledger.
+Raw balance change is a derived reconciliation signal, not profit. Phase 2A shows classified cash totals and observation-based reconciliation; comprehensive profit and profit/hour remain unavailable.
 
 ## Planned domains
 
 The approved roadmap extends the current foundation incrementally:
 
-- classified gold movements and reconciliation
+- advanced ledger review and transfer linking (Phase 2B)
 - structured farms, dungeon runs, and activities
 - profession services, crafts, fees, tips, and material ownership
 - dungeon and raid operations, attendance, assignments, and preparation

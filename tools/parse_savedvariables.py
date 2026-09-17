@@ -9,6 +9,7 @@ from typing import Any
 from lupa import LuaRuntime
 
 from data_model import DATASETS, logical_payload, normalize_record
+from ledger import LEDGER_DATASETS, normalize_ledger, payload
 
 
 def lua_table_to_py(obj):
@@ -75,6 +76,7 @@ def normalize_database(data: dict[str, Any], source_path: Path) -> tuple[dict[st
 
         seen_payloads: Counter[str] = Counter()
         output_rows = []
+        ledger_ids = {}
         for index, source_row in enumerate(source_rows, start=1):
             if not isinstance(source_row, dict):
                 warnings.append({
@@ -83,6 +85,24 @@ def normalize_database(data: dict[str, Any], source_path: Path) -> tuple[dict[st
                     "message": f"Expected table, retained raw representation of {type(source_row).__name__}",
                     "raw_record": repr(source_row),
                 })
+                continue
+            if dataset in LEDGER_DATASETS:
+                row, errors = normalize_ledger(dataset, source_row)
+                row.update(source_file_sha256=source_hash, source_schema_version=schema_version,
+                           source_record_index=index, source_dataset=dataset,
+                           validation_status="error" if errors else "valid",
+                           raw_record=json.dumps(source_row, sort_keys=True, ensure_ascii=False))
+                for message in errors:
+                    warnings.append(dict(dataset=dataset, source_record_index=index,
+                        record_id=row.get("record_id"), severity="error", code="invalid_ledger_record",
+                        field="", message=message, raw_record=row["raw_record"]))
+                prior = ledger_ids.get(str(row.get("record_id")))
+                if prior and payload(dataset, prior) != payload(dataset, row):
+                    warnings.append(dict(dataset=dataset, source_record_index=index,
+                        record_id=row.get("record_id"), severity="error", code="ledger_id_conflict",
+                        field="record_id", message="Same ID with conflicting payload", raw_record=row["raw_record"]))
+                ledger_ids.setdefault(str(row.get("record_id")), row)
+                output_rows.append(row)
                 continue
             payload_key = json.dumps(logical_payload(dataset, source_row), sort_keys=True, ensure_ascii=False, default=str)
             ordinal = seen_payloads[payload_key]

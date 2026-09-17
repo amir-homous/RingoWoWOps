@@ -1,6 +1,6 @@
 local ADDON_NAME = "RingoWoWOps"
-local ADDON_VERSION = "0.3.0"
-local SCHEMA_VERSION = 3
+local ADDON_VERSION = "0.4.0"
+local SCHEMA_VERSION = 4
 
 RingoWoWOpsDB = RingoWoWOpsDB
 
@@ -38,6 +38,10 @@ local function initializeDatabase()
       if settings.active_session_id == "" then
         settings.active_session_id = nil
       end
+    end,
+    function()
+      EnsureTable("ledger_entries")
+      EnsureTable("ledger_voids")
     end
   }
 
@@ -54,6 +58,8 @@ local function initializeDatabase()
   EnsureTable("activities")
   EnsureTable("events")
   EnsureTable("settings")
+  EnsureTable("ledger_entries")
+  EnsureTable("ledger_voids")
   RingoWoWOpsDB.version = ADDON_VERSION
   currentActivity = RingoWoWOpsDB.settings.default_activity or "questing"
 end
@@ -168,6 +174,175 @@ local function snapshot(reason)
   return snap
 end
 
+-- Same bounded, integer-only grammar as tools/ledger.py.
+local function parseMoney(token, allowZero)
+  if type(token) ~= "string" then return nil, "Missing amount" end
+  local quality = "exact"
+  if token:sub(1, 1) == "~" then quality = "estimated"; token = token:sub(2) end
+  token = token:lower()
+  local total, previous, pos = 0, 4, 1
+  local ranks, factors = {g=3, s=2, c=1}, {g=10000, s=100, c=1}
+  while pos <= #token do
+    local first, last, digits, unit = token:find("(%d+)([gsc])", pos)
+    if first ~= pos or ranks[unit] >= previous then return nil, "Use ordered explicit units" end
+    digits = digits:gsub("^0+", "")
+    if #digits > 10 then return nil, "Amount exceeds safe copper bound" end
+    local component = tonumber(digits) or 0
+    total = total + component * factors[unit]
+    if total > 2147483647 then return nil, "Amount exceeds 2147483647 copper" end
+    previous, pos = ranks[unit], last + 1
+  end
+  if token == "" or total < (allowZero and 0 or 1) then return nil, "Amount must be positive" end
+  return total, quality
+end
+
+local function moneyText(amount)
+  return string.format("%dg %ds %dc", math.floor(amount / 10000), math.floor(amount / 100) % 100, amount % 100)
+end
+
+local function ledgerError(message)
+  printMsg("Ledger: " .. message .. ". Example: /rwo income 25g service enchanting tip")
+end
+
+local function ledgerTokens(text)
+  local tokens, pos = {}, 1
+  while pos <= #text do
+    local _, finish = text:find("^%s+", pos)
+    if finish then pos = finish + 1 end
+    if pos > #text then break end
+    local token
+    if text:sub(pos, pos) == '"' then
+      local closing = text:find('"', pos + 1, true)
+      if not closing then return nil, "Unclosed quoted counterparty" end
+      token, pos = text:sub(pos + 1, closing - 1), closing + 1
+      if pos <= #text and not text:sub(pos, pos):match("%s") then return nil, "Space required after quote" end
+    else
+      local first, last = text:find("%S+", pos)
+      token, pos = text:sub(first, last), last + 1
+    end
+    table.insert(tokens, token)
+  end
+  return tokens
+end
+
+local incomeCategories = {service=true, craft=true, sale=true, activity=true, refund=true, other=true}
+local expenseCategories = {repair=true, training=true, supplies=true, materials=true, purchase=true, fees=true, other=true}
+
+local function shortLedgerID(id)
+  local suffix = id:match("(%d+)$") or id
+  while #suffix < #id do
+    local matches = 0
+    for _, entry in ipairs(EnsureTable("ledger_entries")) do
+      if entry.id:sub(-#suffix) == suffix then matches = matches + 1 end
+    end
+    if matches <= 1 then break end
+    suffix = id:sub(-(#suffix + 1))
+  end
+  return suffix
+end
+
+local function isVoided(id)
+  for _, void in ipairs(EnsureTable("ledger_voids")) do
+    if void.entry_id == id then return true end
+  end
+  return false
+end
+
+local function addLedger(command, rest)
+  local tokens, err = ledgerTokens(rest)
+  if not tokens then ledgerError(err); return end
+  local direction, category, amountToken, counterparty, offset
+  if command == "income" or command == "expense" then
+    direction = command == "income" and "in" or "out"
+    amountToken, category, offset = tokens[1], tokens[2], 3
+    if not (direction == "in" and incomeCategories or expenseCategories)[category or ""] then
+      ledgerError("Invalid category for " .. command); return
+    end
+  elseif command == "transfer" then
+    direction, amountToken, counterparty, category, offset = tokens[1], tokens[2], tokens[3], "transfer", 4
+  else
+    direction = command == "giftin" and "in" or "out"
+    amountToken, counterparty, category, offset = tokens[1], tokens[2], "gift", 3
+  end
+  if direction ~= "in" and direction ~= "out" then ledgerError("Direction must be in or out"); return end
+  if (category == "gift" or category == "transfer") and (not counterparty or not counterparty:match("%S")) then
+    ledgerError("Counterparty required"); return
+  end
+  local amount, quality = parseMoney(amountToken, false)
+  if not amount then ledgerError(quality); return end
+  local options, note = {}, {}
+  while offset <= #tokens do
+    local token = tokens[offset]
+    if token == "--" then
+      for i = offset + 1, #tokens do table.insert(note, tokens[i]) end
+      break
+    elseif token:sub(1, 2) == "--" then
+      if token ~= "--cost" and token ~= "--materials" and token ~= "--activity" then ledgerError("Unknown option " .. token); return end
+      if options[token] or not tokens[offset + 1] or tokens[offset + 1]:sub(1, 2) == "--" then ledgerError("Missing or repeated option " .. token); return end
+      options[token], offset = tokens[offset + 1], offset + 2
+    else
+      for i = offset, #tokens do table.insert(note, tokens[i]) end
+      break
+    end
+  end
+  local cost, costQuality
+  if options["--cost"] then
+    cost, costQuality = parseMoney(options["--cost"], true)
+    if not cost then ledgerError(costQuality); return end
+  end
+  local provision = options["--materials"]
+  if provision and not ({customer=true, player=true, mixed=true, unknown=true})[provision] then ledgerError("Invalid material provision"); return end
+  if provision == "customer" and cost and cost ~= 0 then ledgerError("Customer materials cannot be valued"); return end
+  if (cost or provision) and not (direction == "in" and incomeCategories[category] and category ~= "refund") then ledgerError("Material annotations require an income receipt"); return end
+  local timestamp = now()
+  local entry = {id=newRecordID("ledger"), time=timestamp, created_at=timestamp,
+    character=getCharacter(), realm=getRealm(), session_id=currentSession and currentSession.id or nil,
+    direction=direction, category=category, amount_copper=amount, amount_quality=quality,
+    input_source="addon_command", counterparty=counterparty, note=table.concat(note, " "),
+    activity=options["--activity"], player_material_cost_copper=cost,
+    material_cost_quality=costQuality, material_provision=provision,
+    schema_version=1, addon_schema_version=4}
+  table.insert(EnsureTable("ledger_entries"), entry)
+  snapshot("ledger_entry")
+  printMsg(direction .. " " .. moneyText(amount) .. " [" .. category .. "] " .. getCharacter() .. "@" .. getRealm() .. " #" .. shortLedgerID(entry.id) .. " " .. quality)
+end
+
+local function ledgerCommand(rest)
+  local action, arg = rest:match("^(%S*)%s*(.-)$")
+  if action == "undo" then
+    if arg == "" then ledgerError("Entry ID required"); return end
+    local matches = {}
+    for _, entry in ipairs(EnsureTable("ledger_entries")) do
+      if entry.id == arg or entry.id:sub(-#arg) == arg then table.insert(matches, entry) end
+    end
+    if #matches ~= 1 then ledgerError("Entry ID missing or ambiguous"); return end
+    local entry = matches[1]
+    if entry.character ~= getCharacter() or entry.realm ~= getRealm() then ledgerError("Entry belongs to another character"); return end
+    if isVoided(entry.id) then ledgerError("Entry already voided"); return end
+    local timestamp = now()
+    table.insert(EnsureTable("ledger_voids"), {id=newRecordID("void"), entry_id=entry.id,
+      time=timestamp, created_at=timestamp, character=getCharacter(), realm=getRealm(),
+      input_source="addon_command", reason="manual undo", schema_version=1, addon_schema_version=4})
+    printMsg("Voided #" .. shortLedgerID(entry.id) .. "; original retained. Enter replacement normally.")
+  elseif action == "recent" then
+    local entries, shown = EnsureTable("ledger_entries"), 0
+    for i = #entries, 1, -1 do
+      local e = entries[i]
+      if e.character == getCharacter() and e.realm == getRealm() then
+        printMsg("#" .. shortLedgerID(e.id) .. " " .. e.direction .. " " .. moneyText(e.amount_copper) .. " " .. e.category .. " " .. e.amount_quality .. (isVoided(e.id) and " [VOID]" or ""))
+        shown = shown + 1
+        if shown == 10 then break end
+      end
+    end
+    if shown == 0 then printMsg("No ledger entries for this character.") end
+  else
+    printMsg("income/expense <amount> <category> [note]; transfer <in|out> <amount> <counterparty>; giftin/giftout <amount> <counterparty>")
+    printMsg("Income: service craft sale activity refund other. Expense: repair training supplies materials purchase fees other.")
+    printMsg("Money: 12g50s, ~12g estimated. Options before -- note: --cost ~80g --materials mixed --activity fishing")
+    printMsg("ledger recent; ledger undo <unique ID>. gift remains a legacy event only.")
+  end
+end
+
 local function addActivityRecord(activity, source)
   table.insert(EnsureTable("activities"), {
     id = newRecordID("activity"),
@@ -211,6 +386,7 @@ local function addGiftEvent(rest)
   end
 
   addStructuredEvent("gift", "gift " .. amount .. " " .. source, "amount=" .. amount .. "; source=" .. source)
+  printMsg("Legacy gift event only. For cash ledger use /rwo giftin or /rwo giftout.")
 end
 
 local function addTrainingEvent(text)
@@ -569,7 +745,11 @@ SlashCmdList["RINGOWOWOPS"] = function(msg)
   local command, rest = msg:match("^(%S*)%s*(.-)$")
   command = string.lower(command or "")
 
-  if command == "start" then
+  if command == "income" or command == "expense" or command == "transfer" or command == "giftin" or command == "giftout" then
+    addLedger(command, rest)
+  elseif command == "ledger" then
+    ledgerCommand(rest)
+  elseif command == "start" then
     startSession("manual")
   elseif command == "snap" then
     snapshot("manual")
@@ -597,7 +777,7 @@ SlashCmdList["RINGOWOWOPS"] = function(msg)
   elseif command == "realm" then
     setPrimaryRealm(rest)
   else
-    printMsg("Commands: start, snap, stop, status, ui, note <text>, gift <amount> <source>, train <text>, ahscan <items_count>, market <text>, activity <type>, default <activity>, realm [name]")
+    printMsg("Commands: ledger help, income, expense, transfer, giftin, giftout, start, snap, stop, status, ui, note <text>, gift <amount> <source>, train <text>, ahscan <items_count>, market <text>, activity <type>, default <activity>, realm [name]")
   end
 end
 

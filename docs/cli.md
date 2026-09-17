@@ -40,3 +40,25 @@ An unfiltered day containing multiple characters or realms is rejected rather th
 ## Trust boundary
 
 The parser uses Lupa. Parse only trusted local SavedVariables. Common Lua file/process/loading globals are removed, but the input is still executed in a Lua runtime.
+
+## Phase 2A
+
+The CLI imports and reports addon data only. There is no ledger add, backdating,
+transfer matching or candidate review. `doctor` reports schema version, migration
+need and ledger/void counts without modifying the database. `update` prints all
+source record counts. v3 databases migrate to v4 on import with a collision-safe
+SQLite backup. Newer database schemas are rejected.
+
+The financial CSVs are included in local ZIPs as `private_financial_history`.
+No network operation occurs. See [gold-ledger.md](gold-ledger.md) for privacy and
+in-game entry/undo instructions.
+
+For an exclusive date-range endpoint, set optional `report_end_date` or use:
+
+```powershell
+python tools\generate_daily_report.py --date 2026-09-17 --end-date 2026-09-19 --timezone Asia/Tehran --character Testpal --realm Testrealm
+```
+
+Stored Unix timestamps remain unchanged. Requested-window totals and actual
+observed-interval reconciliation are separate. Boundary ties require review;
+insufficient or partial observations do not become fictional balances.

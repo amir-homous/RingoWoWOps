@@ -4,8 +4,8 @@ The addon is a lightweight passive sensor. Expensive normalization and analytics
 
 ## Version and initialization
 
-- Addon version: `0.3.0`
-- SavedVariables schema: `3`
+- Addon version: `0.4.0`
+- SavedVariables schema: `4`
 - Initialization runs after `ADDON_LOADED` for `RingoWoWOps`.
 - Ordered migrations create missing containers/settings without replacing existing tables or records.
 - Migrations are safe to repeat.
@@ -41,7 +41,7 @@ Validation is intentionally lightweight in game. The external parser performs ca
 - Disconnect/crash: if the prior active-session ID survives, the next login marks that session `incomplete` with a recovery timestamp. It does not invent an end time or duration.
 - Addon upgrade: ordered migrations preserve existing tables and records, then update schema/version metadata.
 
-Only the source behavior has been inspected here. These lifecycle paths have not yet been runtime-verified inside WoW.
+Phase 1 addon loading, migration and record creation were runtime-verified by the user. Phase 2A v0.4.0 was also user-validated in WoW: no Lua errors, existing UI/auto-sessions operational, entries and voids persisted across reload, and short-ID undo worked. Automated lifecycle tests additionally use mocked Lua APIs. The repeatable manual checklist remains in [gold-ledger.md](gold-ledger.md).
 
 ## Mini UI
 
@@ -50,3 +50,14 @@ Only the source behavior has been inspected here. These lifecycle paths have not
 ## Safety
 
 The addon reads permitted state and records observations. It does not move, fight, cast, trade, automate auctions, invite, whisper, or call protected gameplay actions.
+
+## Phase 2A ledger
+
+`income`, `expense`, `transfer`, `giftin`, `giftout` and `ledger help/recent/undo`
+share strict validation before saving. The existing mini UI is unchanged. New
+`ledger_entries` and `ledger_voids` containers are initialized by migration 4.
+Stable IDs reuse the persisted sequence; voids never delete or rewrite entries.
+Every successful financial entry captures a following balance snapshot. No money
+movement is inferred. Legacy `gift` continues to create only an event.
+
+See [gold-ledger.md](gold-ledger.md) for grammar, examples, limits and deployment.

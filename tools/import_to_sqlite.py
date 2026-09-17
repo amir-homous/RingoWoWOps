@@ -1,17 +1,18 @@
+from contextlib import closing
 import argparse
 import csv
 import hashlib
 import json
-import shutil
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from data_model import DATASETS, INTEGER_FIELDS, compatibility_id, normalize_record
+from data_model import DATASETS, PHASE1_DATASETS, INTEGER_FIELDS, compatibility_id, normalize_record
+from ledger import LEDGER_DATASETS, ENTRY_FIELDS, VOID_FIELDS, normalize_ledger, payload
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 TABLE_COLUMNS = {
     "sessions": (
@@ -77,7 +78,9 @@ def backup_database(path: Path) -> Path | None:
     while backup.exists():
         backup = path.with_name(f"{path.stem}.pre_migration_v{SCHEMA_VERSION}_{stamp}_{counter}{path.suffix}")
         counter += 1
-    shutil.copy2(path, backup)
+    with closing(sqlite3.connect(f"file:{path.resolve().as_posix()}?mode=ro", uri=True)) as source:
+        with closing(sqlite3.connect(backup)) as destination:
+            source.backup(destination)
     return backup
 
 
@@ -119,7 +122,7 @@ def apply_migrations(conn: sqlite3.Connection) -> None:
             version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL
         )""")
 
-        for table in DATASETS:
+        for table in PHASE1_DATASETS:
             if _table_exists(conn, table) and "record_id" not in _table_columns(conn, table):
                 legacy = f"legacy_{table}_pre_v2"
                 if not _table_exists(conn, legacy):
@@ -212,6 +215,9 @@ def apply_migrations(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_events_scope_time ON events(character, realm, time);
         CREATE INDEX IF NOT EXISTS idx_validation_batch ON validation_errors(import_batch_id, severity);
         """)
+        if current < 4:
+            _execute_script_without_implicit_commit(conn, Path(__file__).with_name("ledger_schema.sql").read_text(encoding="utf-8"))
+            conn.execute("INSERT INTO migration_history(version,name,applied_at) VALUES(4,'manual_cash_ledger',?)", (utc_now(),))
         if "error_key" not in _table_columns(conn, "validation_errors"):
             conn.execute("ALTER TABLE validation_errors ADD COLUMN error_key TEXT")
         for row in conn.execute("SELECT id,import_batch_id,dataset,source_record_index,code,field,message FROM validation_errors WHERE error_key IS NULL"):
@@ -302,6 +308,50 @@ def _prepare_row(dataset: str, row: dict[str, Any], manifest: dict, index: int) 
     return prepared
 
 
+def _ledger_finding(conn, dataset, row, batch_id, index, code, message):
+    raw = json.dumps(row, sort_keys=True, ensure_ascii=False, default=str)
+    key = hashlib.sha256(f"{batch_id}:{dataset}:{index}:{code}:{raw}".encode()).hexdigest()
+    conn.execute("""INSERT OR IGNORE INTO validation_errors
+        (error_key,import_batch_id,dataset,source_record_index,record_id,severity,code,field,message,raw_record,created_at)
+        VALUES(?,?,?,?,?,'error',?,'',?,?,?)""",
+        (key,batch_id,dataset,index,row.get('record_id') or row.get('id'),code,message,raw,utc_now()))
+
+
+def _import_ledger(conn, dataset, source, manifest, index, batch_id):
+    row, errors = normalize_ledger(dataset, source)
+    if source.get('validation_status') == 'error':
+        errors.append('Source parser rejected the original record; CSV text cannot repair it')
+    if errors:
+        _ledger_finding(conn,dataset,row,batch_id,index,'invalid_ledger_record','; '.join(errors))
+        return 0
+    logical = payload(dataset,row)
+    previous = conn.execute(f'SELECT logical_payload FROM {dataset} WHERE record_id=?', (row['record_id'],)).fetchone()
+    if previous:
+        if previous[0] != logical:
+            _ledger_finding(conn,dataset,row,batch_id,index,'ledger_id_conflict','Existing ID has a different payload; original retained')
+        return 0
+    if dataset == 'ledger_voids':
+        target = conn.execute('SELECT character,realm FROM ledger_entries WHERE record_id=?',(row['entry_id'],)).fetchone()
+        already = conn.execute('SELECT 1 FROM ledger_voids WHERE entry_id=?',(row['entry_id'],)).fetchone()
+        if not target or tuple(target) != (row['character'],row['realm']) or already:
+            _ledger_finding(conn,dataset,row,batch_id,index,'invalid_void_target','Missing, foreign, or already voided entry')
+            return 0
+    elif row.get('session_id'):
+        session = conn.execute('SELECT character,realm FROM sessions WHERE record_id=?',(row['session_id'],)).fetchone()
+        if session and tuple(session) != (row['character'],row['realm']):
+            _ledger_finding(conn,dataset,row,batch_id,index,'invalid_session_identity','Session belongs to another identity')
+            return 0
+        # Keep an unresolved source session ID as a soft reference; never invent a session.
+    fields = ENTRY_FIELDS if dataset == 'ledger_entries' else VOID_FIELDS
+    values = {key: (row.get(key) if row.get(key) != '' else None) for key in fields}
+    values.update(character_id=_identity_id(conn,row), source_file_sha256=manifest['source_file_sha256'],
+        source_schema_version=str(manifest.get('source_schema_version','unknown')),
+        source_record_index=index,source_dataset=dataset,import_batch_id=batch_id,
+        logical_payload=logical,raw_record=source.get('raw_record') or json.dumps(source,sort_keys=True))
+    conn.execute(f'INSERT INTO {dataset} ({",".join(values)}) VALUES ({",".join("?" for _ in values)})',list(values.values()))
+    return 1
+
+
 def import_directory(csv_dir: Path, db_path: Path, *, make_backup: bool = True) -> dict[str, Any]:
     csv_dir, db_path = csv_dir.resolve(), db_path.resolve()
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -324,6 +374,9 @@ def import_directory(csv_dir: Path, db_path: Path, *, make_backup: bool = True) 
 
         for dataset in DATASETS:
             for index, source_row in enumerate(read_csv(csv_dir / f"{dataset}.csv"), start=1):
+                if dataset in LEDGER_DATASETS:
+                    counts[dataset] += _import_ledger(conn, dataset, source_row, manifest, index, batch_id)
+                    continue
                 row = _prepare_row(dataset, source_row, manifest, index)
                 row["character_id"] = _identity_id(conn, row)
                 row["import_batch_id"] = batch_id

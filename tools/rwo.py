@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from generate_daily_report import resolve_timezone
+from import_to_sqlite import SCHEMA_VERSION
+from data_model import DATASETS
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -63,7 +65,7 @@ def configured_paths(config: dict) -> dict[str, Path]:
 
 def report_args(config: dict, paths: dict[str, Path]) -> list[str]:
     args = ["--db", str(paths["db"]), "--out", str(paths["report"]), "--timezone", config.get("report_timezone", "UTC")]
-    for config_key, flag in (("report_date", "--date"), ("report_character", "--character"), ("report_realm", "--realm")):
+    for config_key, flag in (("report_end_date", "--end-date"), ("report_date", "--date"), ("report_character", "--character"), ("report_realm", "--realm")):
         if config.get(config_key):
             args.extend([flag, str(config[config_key])])
     return args
@@ -84,6 +86,7 @@ def update(config: dict) -> None:
     if manifest.exists():
         details = json.loads(manifest.read_text(encoding="utf-8"))
         print(f"Validation summary: {details.get('validation_counts', {})}")
+        print(f"Record counts: {details.get('record_counts', {})}")
     print(f"Report ready: {paths['report']}")
 
 
@@ -94,8 +97,14 @@ def database_status(path: Path) -> str:
         conn = sqlite3.connect(f"file:{path.resolve().as_posix()}?mode=ro", uri=True)
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         migrations = conn.execute("SELECT count(*) FROM migration_history").fetchone()[0] if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='migration_history'").fetchone() else 0
+        counts = {table: conn.execute(f'SELECT count(*) FROM {table}').fetchone()[0]
+                  for table in ('ledger_entries','ledger_voids')
+                  if conn.execute("SELECT 1 FROM sqlite_master WHERE name=?",(table,)).fetchone()}
         conn.close()
-        return f"OK - schema v{version}, {migrations} migration record(s)"
+        if version > SCHEMA_VERSION:
+            return f"ERROR - schema v{version} is newer than supported v{SCHEMA_VERSION}"
+        state = 'OK' if version == SCHEMA_VERSION else 'MIGRATION REQUIRED'
+        return f"{state} - schema v{version}, target v{SCHEMA_VERSION}, {migrations} migration record(s), ledger counts {counts}"
     except sqlite3.Error as exc:
         return f"ERROR - {exc}"
 
@@ -130,7 +139,7 @@ def make_upload_zip(config: dict) -> None:
     out_dir = PROJECT_ROOT / "data/upload"
     out_dir.mkdir(parents=True, exist_ok=True)
     zip_path = out_dir / f"RingoWoWOps_upload_{stamp}.zip"
-    candidates = [paths["raw"], paths["report"]] + [paths["processed"] / f"{name}.csv" for name in ("sessions", "snapshots", "notes", "activities", "events", "validation_errors")] + [paths["processed"] / "source_manifest.json"]
+    candidates = [paths["raw"], paths["report"]] + [paths["processed"] / f"{name}.csv" for name in (*DATASETS, "validation_errors")] + [paths["processed"] / "source_manifest.json"]
     included = []
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as archive:
         for file in candidates:
@@ -141,7 +150,7 @@ def make_upload_zip(config: dict) -> None:
                 included.append({
                     "path": arcname,
                     "size": file.stat().st_size,
-                    "privacy": "private_raw_savedvariables" if is_raw_savedvariables else "may_contain_private_history",
+                    "privacy": "private_raw_savedvariables" if is_raw_savedvariables else "private_financial_history" if file.stem in ("ledger_entries", "ledger_voids") else "may_contain_private_history",
                 })
         upload_manifest = {
             "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),

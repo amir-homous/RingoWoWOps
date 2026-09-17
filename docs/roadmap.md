@@ -19,11 +19,21 @@ Implemented:
 - scoped calendar-day reporting and corrected balance terminology
 - sanitized automated and end-to-end tests
 
-WoW runtime lifecycle verification remains manual.
+Phase 1 runtime verification passed at v0.3.0, including migration and repeated import.
 
-## Phase 2 — Unified gold ledger
+## Phase 2A - Minimal manual cash ledger
 
-Planned, not implemented. Add explicit manual income, expense, gift, and transfer entries; reconcile them against observed balance changes; never infer that raw change is profit.
+Implemented and user-validated in WoW at v0.4.0. Explicit income,
+expense, gifts, one-sided transfers, strict money parsing, optional player-material
+annotations, append-only voids, SQLite v4 import/conflict validation, and scoped
+cash totals with conservative observation reconciliation. No profit/hour or new UI.
+See [gold-ledger.md](gold-ledger.md) for acceptance and deployment checklist.
+
+## Phase 2B - Ledger maintenance (deferred)
+
+Manual/backdated CLI entries, legacy candidate review, transfer linking, controlled
+adjustments and any ledger entry UI require a separate approved implementation.
+Account-wide aggregation and inventory valuation remain deferred as well.
 
 ## Phase 3 — Structured activities and runs
 

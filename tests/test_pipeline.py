@@ -174,11 +174,11 @@ class PipelineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "legacy.sqlite"
             conn = sqlite3.connect(db); conn.execute("CREATE TABLE old_data(id INTEGER)"); conn.commit(); conn.close()
-            collision = db.with_name("legacy.pre_migration_v3_20260102_030405.sqlite")
+            collision = db.with_name(f"legacy.pre_migration_v{SCHEMA_VERSION}_20260102_030405.sqlite")
             collision.write_bytes(b"existing backup")
             with patch.object(import_to_sqlite, "datetime", FrozenDateTime):
                 result = backup_database(db)
-            self.assertEqual(result.name, "legacy.pre_migration_v3_20260102_030405_1.sqlite")
+            self.assertEqual(result.name, f"legacy.pre_migration_v{SCHEMA_VERSION}_20260102_030405_1.sqlite")
             self.assertEqual(collision.read_bytes(), b"existing backup")
 
     def test_end_to_end_scoped_report(self):
