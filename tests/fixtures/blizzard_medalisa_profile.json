@@ -1,0 +1,10 @@
+{
+  "profile": {
+    "name": "Medalisa",
+    "realm": {"name": "Spineshatter", "slug": "spineshatter"},
+    "level": 70,
+    "race": {"name": "Blood Elf"},
+    "character_class": {"name": "Priest"},
+    "faction": {"name": "Horde"}
+  }
+}

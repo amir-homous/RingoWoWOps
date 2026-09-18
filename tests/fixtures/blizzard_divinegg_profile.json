@@ -1,0 +1,12 @@
+{
+  "profile": {
+    "name": "Divinegg",
+    "realm": {"name": "Spineshatter", "slug": "spineshatter"},
+    "level": 70,
+    "race": {"name": "Blood Elf"},
+    "character_class": {"name": "Paladin"},
+    "faction": {"name": "Horde"},
+    "active_spec": {"name": "Retribution"}
+  },
+  "equipment": {"equipped_items": []}
+}
