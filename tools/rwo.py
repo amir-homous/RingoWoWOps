@@ -14,6 +14,7 @@ from import_to_sqlite import SCHEMA_VERSION
 from data_model import DATASETS
 import wcl
 import roster
+import raid_helper
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -173,7 +174,7 @@ def make_upload_zip(config: dict) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="RingoWoWOps local helper CLI")
-    parser.add_argument("command", choices=["update", "doctor", "upload", "wcl-import", "roster-import", "raid-event-upsert", "raid-event-link-report", "attendance-report"])
+    parser.add_argument("command", choices=["update", "doctor", "upload", "wcl-import", "roster-import", "raid-event-upsert", "raid-event-link-report", "attendance-report", "raid-helper-import", "raid-reconcile"])
     parser.add_argument("--config", default=str(DEFAULT_CONFIG))
     parser.add_argument("--report-code")
     parser.add_argument("--offline-json")
@@ -187,6 +188,7 @@ def main() -> None:
     parser.add_argument("--game-version")
     parser.add_argument("--region")
     parser.add_argument("--realm")
+    parser.add_argument("--event-id")
     args = parser.parse_args()
     config = load_config(Path(args.config))
     if args.command == "wcl-import":
@@ -241,7 +243,19 @@ def main() -> None:
                 print(f"{item['report_code']} {item['display_name']}: {category}{member}; fights={item['attended']}/{item['total_fights']}; attendance={item['attendance_percentage']:.2f}%")
             print(f"Matched guild characters: {result['matched']}; unmatched/PUG participants: {result['unmatched']}")
             return
-    except (roster.RosterError, sqlite3.IntegrityError, OSError) as exc:
+        if args.command == "raid-helper-import":
+            if not args.event_id: parser.error("raid-helper-import requires --event-id")
+            result = raid_helper.run_import(args.event_id, config, paths["db"], offline_json=Path(args.offline_json).resolve() if args.offline_json else None)
+            print(f"Raid-Helper event: {result['event_key']}; signups={result['signups']}; inserted={result['inserted']}; updated={result['updated']}; unchanged={result['unchanged']}")
+            print(f"Sanitized raw archive: {result['archive']}")
+            return
+        if args.command == "raid-reconcile":
+            if not args.event_key: parser.error("raid-reconcile requires --event-key")
+            result = raid_helper.reconcile(paths["db"], args.event_key)
+            print(f"Raid reconciliation: {result['event_key']}; signups={result['signups']}; matched={result['matched']}; unresolved={result['unresolved']}")
+            for category, count in result["categories"].items(): print(f"{category}: {count}")
+            return
+    except (roster.RosterError, raid_helper.RaidHelperError, sqlite3.IntegrityError, OSError) as exc:
         print(f"{args.command} failed: {exc}", file=sys.stderr)
         raise SystemExit(1) from None
     {"update": update, "doctor": doctor, "upload": make_upload_zip}[args.command](config)

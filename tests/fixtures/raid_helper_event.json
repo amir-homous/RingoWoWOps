@@ -1,0 +1,20 @@
+{
+  "id": "1546729699479257104",
+  "title": "Butter & Jam Hyjal",
+  "displayTitle": "Hyjal",
+  "date": "2026-09-13",
+  "startTime": 20,
+  "endTime": 23,
+  "lastUpdated": "sanitized-fixture",
+  "signUps": [
+    {"id":"signup-1","name":"Amiringo","status":"primary","className":"Paladin","roleName":"Healer","specName":"Holy","entryTime":"2026-09-10T10:00:00Z","position":1},
+    {"id":"signup-2","name":"Medalisa","status":"tentative","className":"Priest","roleName":"Healer","specName":"Holy","entryTime":"2026-09-10T10:01:00Z","position":2},
+    {"id":"signup-3","name":"Divinegg","status":"bench","className":"Paladin","roleName":"Healer","position":3},
+    {"id":"signup-4","name":"Eggslayer/Mosesa","status":"primary","className":"Warrior","roleName":"DPS","position":4},
+    {"id":"signup-5","name":"Unknown One","status":"primary","position":5},
+    {"id":"signup-6","name":"Anotherunknown","status":"primary","position":6},
+    {"id":"signup-7","name":"Absentchar","status":"primary","position":7},
+    {"id":"signup-8","name":"Maybechar","status":"tentative","position":8},
+    {"id":"signup-9","name":"Benchchar","status":"bench","position":9}
+  ]
+}

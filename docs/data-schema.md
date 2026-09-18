@@ -51,7 +51,7 @@ Phase 1 legacy records without IDs receive deterministic content-based compatibi
 
 Invalid record types are retained in validation output as raw representations. Missing/incomplete fields generate inspectable warnings rather than silent deletion.
 
-## SQLite schema v7
+## SQLite schema v8
 
 Core tables:
 
@@ -79,6 +79,8 @@ Core tables:
 - `roster_import_rejections`
 - `raid_events`
 - `raid_event_reports`
+- `raid_helper_import_batches`
+- `raid_helper_signups`
 
 Core records use typed columns and `record_id` primary keys. Source identities preserve exact character and realm strings and are never automatically merged. Child tables may reference a source session. Scope/time indexes support report queries.
 
@@ -170,3 +172,16 @@ Raid events are manual metadata keyed by `<source>/<external-event-id>`.
 foreign keys to both the event and WCL report. Roster rejections retain review
 evidence locally. Member Discord IDs and notes stay in SQLite/private CSV and are
 excluded from attendance output and upload ZIP candidates.
+
+## Raid-Helper public signup evidence
+
+Schema v8 adds content-addressed public-event import batches and one current
+source row per event/signup identity. Signup rows retain exact source status,
+class, role, spec, name, timestamps, optional Discord ID, optional notes, and the
+private raw record. Discord IDs, notes, and raw records remain SQLite-only.
+
+Resolution references existing member/character rows and uses exact Discord ID,
+then exact external character identity, then exact normalized character name in
+the event namespace. Unresolved source rows remain present. Reconciliation is
+calculated from signup, roster, event-report, and WCL attendance evidence; it is
+not stored as mutable truth.
