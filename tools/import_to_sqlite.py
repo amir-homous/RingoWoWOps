@@ -10,9 +10,10 @@ from typing import Any
 
 from data_model import DATASETS, PHASE1_DATASETS, INTEGER_FIELDS, compatibility_id, normalize_record
 from ledger import LEDGER_DATASETS, ENTRY_FIELDS, VOID_FIELDS, normalize_ledger, payload
+import farm
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 6
 
 TABLE_COLUMNS = {
     "sessions": (
@@ -218,6 +219,12 @@ def apply_migrations(conn: sqlite3.Connection) -> None:
         if current < 4:
             _execute_script_without_implicit_commit(conn, Path(__file__).with_name("ledger_schema.sql").read_text(encoding="utf-8"))
             conn.execute("INSERT INTO migration_history(version,name,applied_at) VALUES(4,'manual_cash_ledger',?)", (utc_now(),))
+        if current < 5:
+            _execute_script_without_implicit_commit(conn, Path(__file__).with_name("farm_schema.sql").read_text(encoding="utf-8"))
+            conn.execute("INSERT INTO migration_history(version,name,applied_at) VALUES(5,'farm_run_core',?)", (utc_now(),))
+        if current < 6:
+            _execute_script_without_implicit_commit(conn, Path(__file__).with_name("wcl_schema.sql").read_text(encoding="utf-8"))
+            conn.execute("INSERT INTO migration_history(version,name,applied_at) VALUES(6,'warcraft_logs_v1',?)", (utc_now(),))
         if "error_key" not in _table_columns(conn, "validation_errors"):
             conn.execute("ALTER TABLE validation_errors ADD COLUMN error_key TEXT")
         for row in conn.execute("SELECT id,import_batch_id,dataset,source_record_index,code,field,message FROM validation_errors WHERE error_key IS NULL"):
@@ -352,6 +359,45 @@ def _import_ledger(conn, dataset, source, manifest, index, batch_id):
     return 1
 
 
+def _import_farm(conn, dataset, source, manifest, index, batch_id):
+    row, errors = farm.normalize(dataset, source)
+    if source.get('validation_status') == 'error':
+        errors.append('Parser rejected original farm record')
+    if errors:
+        _ledger_finding(conn,dataset,row,batch_id,index,'invalid_farm_record','; '.join(errors))
+        return 0
+    logical = farm.payload(dataset,row)
+    old = conn.execute(f'SELECT logical_payload FROM {dataset} WHERE record_id=?',(row['record_id'],)).fetchone()
+    if old:
+        if old[0] != logical:
+            _ledger_finding(conn,dataset,row,batch_id,index,'farm_id_conflict','Existing ID has different payload; retained original')
+        return 0
+    if dataset == 'farm_run_events':
+        header = conn.execute('SELECT logical_payload FROM farm_runs WHERE record_id=?',(row['farm_run_id'],)).fetchone()
+        previous = conn.execute('SELECT logical_payload FROM farm_run_events WHERE farm_run_id=? ORDER BY revision DESC LIMIT 1',(row['farm_run_id'],)).fetchone()
+        if not header:
+            errors = ['missing farm run header']
+        else:
+            header = json.loads(header[0])
+            errors = farm.transition_errors(header,json.loads(previous[0]) if previous else header,row)
+        if errors:
+            _ledger_finding(conn,dataset,row,batch_id,index,'invalid_farm_transition','; '.join(errors))
+            return 0
+    if row.get('session_id'):
+        identity = conn.execute('SELECT character,realm FROM sessions WHERE record_id=?',(row['session_id'],)).fetchone()
+        if identity and tuple(identity)!=(row['character'],row['realm']):
+            _ledger_finding(conn,dataset,row,batch_id,index,'invalid_farm_identity','Session belongs to another identity')
+            return 0
+    fields = farm.BASE_FIELDS if dataset == 'farm_runs' else farm.EVENT_FIELDS
+    values = {k: row.get(k) for k in fields}
+    values.update(character_id=_identity_id(conn,row),source_file_sha256=manifest['source_file_sha256'],
+                  source_schema_version=str(manifest.get('source_schema_version','unknown')),
+                  source_record_index=index,source_dataset=dataset,import_batch_id=batch_id,
+                  logical_payload=logical,raw_record=source.get('raw_record') or json.dumps(source,sort_keys=True))
+    conn.execute(f'INSERT INTO {dataset} ({",".join(values)}) VALUES ({",".join("?" for _ in values)})',list(values.values()))
+    return 1
+
+
 def import_directory(csv_dir: Path, db_path: Path, *, make_backup: bool = True) -> dict[str, Any]:
     csv_dir, db_path = csv_dir.resolve(), db_path.resolve()
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -373,7 +419,13 @@ def import_directory(csv_dir: Path, db_path: Path, *, make_backup: bool = True) 
             (batch_id, source_hash, schema_version, str(csv_dir), utc_now(), json.dumps(manifest, sort_keys=True)))
 
         for dataset in DATASETS:
-            for index, source_row in enumerate(read_csv(csv_dir / f"{dataset}.csv"), start=1):
+            source_rows = list(enumerate(read_csv(csv_dir / f"{dataset}.csv"), start=1))
+            if dataset == 'farm_run_events':
+                source_rows.sort(key=lambda item: (str(item[1].get('farm_run_id')), _int_or_none(item[1].get('revision')) or -1))
+            for index, source_row in source_rows:
+                if dataset in farm.FARM_DATASETS:
+                    counts[dataset] += _import_farm(conn,dataset,source_row,manifest,index,batch_id)
+                    continue
                 if dataset in LEDGER_DATASETS:
                     counts[dataset] += _import_ledger(conn, dataset, source_row, manifest, index, batch_id)
                     continue

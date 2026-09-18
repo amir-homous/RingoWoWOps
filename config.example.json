@@ -9,5 +9,18 @@
   "daily_report": "data\\processed\\daily_report.md",
   "report_timezone": "Asia/Tehran",
   "report_character": null,
-  "report_realm": null
+  "report_realm": null,
+  "wcl": {
+    "base_url": "https://fresh.warcraftlogs.com/v1",
+    "api_key_env": "WCL_V1_KEY",
+    "raw_dir": "data\\raw\\wcl",
+    "game_version": "tbc-anniversary",
+    "region": "eu",
+    "realm": "spineshatter",
+    "guild_character_keys": [
+      "tbc-anniversary/eu/spineshatter/amiringo",
+      "tbc-anniversary/eu/spineshatter/medalisa",
+      "tbc-anniversary/eu/spineshatter/divinegg"
+    ]
+  }
 }

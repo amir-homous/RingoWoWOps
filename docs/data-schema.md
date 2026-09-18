@@ -2,11 +2,11 @@
 
 ## Source SavedVariables
 
-Schema v4 root:
+Schema v5 root:
 
 ```text
-version = "0.4.0"
-schema_version = 4
+version = "0.5.0"
+schema_version = 5
 sessions
 snapshots
 notes
@@ -14,6 +14,10 @@ activities
 events
 ledger_entries
 ledger_voids
+farm_runs
+farm_run_events
+farm_settings
+active_farm_run
 settings
 ```
 
@@ -47,7 +51,7 @@ Phase 1 legacy records without IDs receive deterministic content-based compatibi
 
 Invalid record types are retained in validation output as raw representations. Missing/incomplete fields generate inspectable warnings rather than silent deletion.
 
-## SQLite schema v4
+## SQLite schema v6
 
 Core tables:
 
@@ -63,6 +67,12 @@ Core tables:
 - `validation_errors`
 - `ledger_entries`
 - `ledger_voids`
+- `wcl_import_batches`
+- `wcl_reports`
+- `wcl_fights`
+- `wcl_characters`
+- `wcl_report_participants`
+- `wcl_fight_attendance`
 
 Core records use typed columns and `record_id` primary keys. Source identities preserve exact character and realm strings and are never automatically merged. Child tables may reference a source session. Scope/time indexes support report queries.
 
@@ -105,3 +115,38 @@ Ledger IDs must be supplied, not generated from malformed or ambiguous records.
 - Ledger semantics and conservative boundaries: [gold-ledger.md](gold-ledger.md).
 
 Raw balance change must never be interpreted as profit.
+
+## Phase 3A append-only farm data
+
+Two additional domain tables: `farm_runs` and `farm_run_events`. Generated exports
+have the same names with `.csv`. Registry definitions live only in the shared
+FarmPresets.lua source, not database enums or guessed map IDs.
+
+The immutable `farm_runs` row is a prepared revision-zero header. Every event
+contains a complete typed post-transition snapshot; `farm_run_id` references the
+header and `(farm_run_id, revision)` is unique. Latest validated event supplies the
+current summary. Started/finished/completed timestamps and observed money remain
+nullable until actually observed. Interrupted runs never acquire fabricated end
+fields. The schema is [farm_schema.sql](../tools/farm_schema.sql); detailed fields
+and evidence semantics are in [farm-dashboard.md](farm-dashboard.md).
+
+Farm record schema is 1, source addon schema is 5. Existing ledger records retain
+their v4 ledger producer contract and schema 1 without rewriting/rebuilding the
+ledger tables; file provenance records the actual addon file version. Migration
+v5 uses a pre-migration SQLite backup and one transaction. Imports skip identical
+IDs, quarantine conflicting/malformed records and validate revision chains. Batch
+failure rolls back all inserted farm evidence. Phase 1/2 data remains intact.
+
+## Warcraft Logs V1 attendance foundation
+
+Schema v6 adds report, fight, external character, report-participation, and
+per-fight attendance tables. Report codes, `(report_code, fight_id)`, external
+character keys, report/character pairs, and report/fight/character triples are
+unique. Foreign keys require attendance to refer to an imported fight and report
+participant. Import batches are unique by report code and public-response SHA-256.
+
+External keys are `<game-version>/<region>/<normalized-realm>/<normalized-name>`.
+Display names and realms remain separately available. Guild membership is true
+only for keys explicitly listed in local configuration; unknown/PUG characters
+remain first-class participants. Attendance comes from WCL fight actor lists, not
+Raid-Helper signups.

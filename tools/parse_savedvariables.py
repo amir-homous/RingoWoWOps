@@ -10,6 +10,7 @@ from lupa import LuaRuntime
 
 from data_model import DATASETS, logical_payload, normalize_record
 from ledger import LEDGER_DATASETS, normalize_ledger, payload
+import farm
 
 
 def lua_table_to_py(obj):
@@ -86,21 +87,25 @@ def normalize_database(data: dict[str, Any], source_path: Path) -> tuple[dict[st
                     "raw_record": repr(source_row),
                 })
                 continue
-            if dataset in LEDGER_DATASETS:
-                row, errors = normalize_ledger(dataset, source_row)
+            if dataset in (*LEDGER_DATASETS, *farm.FARM_DATASETS):
+                normalizer = farm.normalize if dataset in farm.FARM_DATASETS else normalize_ledger
+                logical = farm.payload if dataset in farm.FARM_DATASETS else payload
+                row, errors = normalizer(dataset, source_row)
                 row.update(source_file_sha256=source_hash, source_schema_version=schema_version,
                            source_record_index=index, source_dataset=dataset,
                            validation_status="error" if errors else "valid",
                            raw_record=json.dumps(source_row, sort_keys=True, ensure_ascii=False))
                 for message in errors:
                     warnings.append(dict(dataset=dataset, source_record_index=index,
-                        record_id=row.get("record_id"), severity="error", code="invalid_ledger_record",
+                        record_id=row.get("record_id"), severity="error", code="invalid_farm_record" if dataset in farm.FARM_DATASETS else "invalid_ledger_record",
                         field="", message=message, raw_record=row["raw_record"]))
                 prior = ledger_ids.get(str(row.get("record_id")))
-                if prior and payload(dataset, prior) != payload(dataset, row):
+                if prior and logical(dataset, prior) != logical(dataset, row):
                     warnings.append(dict(dataset=dataset, source_record_index=index,
-                        record_id=row.get("record_id"), severity="error", code="ledger_id_conflict",
+                        record_id=row.get("record_id"), severity="error", code="farm_id_conflict" if dataset in farm.FARM_DATASETS else "ledger_id_conflict",
                         field="record_id", message="Same ID with conflicting payload", raw_record=row["raw_record"]))
+                    if dataset in farm.FARM_DATASETS:
+                        row['validation_status'] = 'error'
                 ledger_ids.setdefault(str(row.get("record_id")), row)
                 output_rows.append(row)
                 continue
@@ -117,6 +122,26 @@ def normalize_database(data: dict[str, Any], source_path: Path) -> tuple[dict[st
             output_rows.append(row)
             warnings.extend(row_warnings)
         normalized[dataset] = output_rows
+
+    farm_headers = {r['record_id']: r for r in normalized['farm_runs'] if r['validation_status']=='valid'}
+    farm_latest = dict(farm_headers)
+    seen_events = {}
+    for event in sorted(normalized['farm_run_events'], key=lambda r: (str(r.get('farm_run_id')), r.get('revision') if type(r.get('revision')) is int else -1)):
+        if event['validation_status'] != 'valid':
+            continue
+        if event['record_id'] in seen_events:
+            continue
+        seen_events[event['record_id']] = event
+        header = farm_headers.get(event['farm_run_id'])
+        prior = farm_latest.get(event['farm_run_id'])
+        errors = farm.transition_errors(header, prior, event) if header else ['missing farm run header']
+        if errors:
+            event['validation_status'] = 'error'
+            warnings.append(dict(dataset='farm_run_events', source_record_index=event['source_record_index'],
+                record_id=event['record_id'], severity='error', code='invalid_farm_transition', field='',
+                message='; '.join(errors), raw_record=event['raw_record']))
+        else:
+            farm_latest[event['farm_run_id']] = event
 
     metadata = {
         "parser_format_version": 2,

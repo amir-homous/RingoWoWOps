@@ -8,7 +8,7 @@ from typing import Any
 
 
 PHASE1_DATASETS = ("sessions", "snapshots", "notes", "activities", "events")
-DATASETS = PHASE1_DATASETS + ("ledger_entries", "ledger_voids")
+DATASETS = PHASE1_DATASETS + ("ledger_entries", "ledger_voids", "farm_runs", "farm_run_events")
 
 ACTIVITY_ALIASES = {
     "quest": "questing",
