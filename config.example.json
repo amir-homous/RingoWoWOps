@@ -13,6 +13,15 @@
   "raid_helper": {
     "raw_dir": "data\\raw\\raid-helper"
   },
+  "blizzard": {
+    "token_url": "https://oauth.battle.net/token",
+    "api_base_url": "https://eu.api.blizzard.com",
+    "raw_dir": "data\\raw\\blizzard",
+    "namespace": "profile-classic1x-eu",
+    "locale": "en_GB",
+    "client_id_env": "BLIZZARD_CLIENT_ID",
+    "client_secret_env": "BLIZZARD_CLIENT_SECRET"
+  },
   "wcl": {
     "base_url": "https://fresh.warcraftlogs.com/v1",
     "api_key_env": "WCL_V1_KEY",

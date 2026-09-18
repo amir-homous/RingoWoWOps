@@ -15,6 +15,7 @@ from data_model import DATASETS
 import wcl
 import roster
 import raid_helper
+import blizzard
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -174,7 +175,7 @@ def make_upload_zip(config: dict) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="RingoWoWOps local helper CLI")
-    parser.add_argument("command", choices=["update", "doctor", "upload", "wcl-import", "roster-import", "raid-event-upsert", "raid-event-link-report", "attendance-report", "raid-helper-import", "raid-reconcile"])
+    parser.add_argument("command", choices=["update", "doctor", "upload", "wcl-import", "roster-import", "raid-event-upsert", "raid-event-link-report", "attendance-report", "raid-helper-import", "raid-reconcile", "blizzard-import"])
     parser.add_argument("--config", default=str(DEFAULT_CONFIG))
     parser.add_argument("--report-code")
     parser.add_argument("--offline-json")
@@ -189,6 +190,8 @@ def main() -> None:
     parser.add_argument("--region")
     parser.add_argument("--realm")
     parser.add_argument("--event-id")
+    parser.add_argument("--character-key")
+    parser.add_argument("--all-roster-characters", action="store_true")
     args = parser.parse_args()
     config = load_config(Path(args.config))
     if args.command == "wcl-import":
@@ -213,6 +216,25 @@ def main() -> None:
         return
     paths = configured_paths(config)
     try:
+        if args.command == "blizzard-import":
+            if bool(args.character_key) == bool(args.all_roster_characters):
+                parser.error("blizzard-import requires exactly one of --character-key or --all-roster-characters")
+            keys = blizzard.roster_character_keys(paths["db"]) if args.all_roster_characters else [args.character_key]
+            results = []
+            for key in keys:
+                try:
+                    results.append(blizzard.import_character(key, config, paths["db"], offline_json=Path(args.offline_json).resolve() if args.offline_json else None))
+                except (blizzard.BlizzardError, sqlite3.Error, OSError) as exc:
+                    results.append({"character_key": key, "status": "failed", "fields": [], "archive": None})
+                    print(f"Blizzard profile {key}: failed ({exc})", file=sys.stderr)
+            counts = {status: sum(item["status"] == status for item in results)
+                      for status in ("imported", "unchanged", "unsupported", "missing", "failed")}
+            for item in results:
+                print(f"Blizzard profile {item['character_key']}: {item['status']}; fields={len(item.get('fields', []))}; archive={item.get('archive') or 'none'}")
+            print("Blizzard import: " + "; ".join(f"{key}={value}" for key, value in counts.items()))
+            if counts["failed"]:
+                raise SystemExit(1)
+            return
         if args.command == "roster-import":
             if not args.input: parser.error("roster-import requires --input")
             result = roster.import_roster(Path(args.input).resolve(), paths["db"])
@@ -255,7 +277,7 @@ def main() -> None:
             print(f"Raid reconciliation: {result['event_key']}; signups={result['signups']}; matched={result['matched']}; unresolved={result['unresolved']}")
             for category, count in result["categories"].items(): print(f"{category}: {count}")
             return
-    except (roster.RosterError, raid_helper.RaidHelperError, sqlite3.IntegrityError, OSError) as exc:
+    except (roster.RosterError, raid_helper.RaidHelperError, blizzard.BlizzardError, sqlite3.IntegrityError, OSError) as exc:
         print(f"{args.command} failed: {exc}", file=sys.stderr)
         raise SystemExit(1) from None
     {"update": update, "doctor": doctor, "upload": make_upload_zip}[args.command](config)

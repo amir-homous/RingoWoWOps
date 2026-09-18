@@ -13,7 +13,7 @@ from ledger import LEDGER_DATASETS, ENTRY_FIELDS, VOID_FIELDS, normalize_ledger,
 import farm
 
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 TABLE_COLUMNS = {
     "sessions": (
@@ -231,6 +231,9 @@ def apply_migrations(conn: sqlite3.Connection) -> None:
         if current < 8:
             _execute_script_without_implicit_commit(conn, Path(__file__).with_name("raid_helper_schema.sql").read_text(encoding="utf-8"))
             conn.execute("INSERT INTO migration_history(version,name,applied_at) VALUES(8,'raid_helper_signups',?)", (utc_now(),))
+        if current < 9:
+            _execute_script_without_implicit_commit(conn, Path(__file__).with_name("blizzard_schema.sql").read_text(encoding="utf-8"))
+            conn.execute("INSERT OR REPLACE INTO migration_history(version,name,applied_at) VALUES(9,'blizzard_character_profiles',?)", (utc_now(),))
         if "error_key" not in _table_columns(conn, "validation_errors"):
             conn.execute("ALTER TABLE validation_errors ADD COLUMN error_key TEXT")
         for row in conn.execute("SELECT id,import_batch_id,dataset,source_record_index,code,field,message FROM validation_errors WHERE error_key IS NULL"):

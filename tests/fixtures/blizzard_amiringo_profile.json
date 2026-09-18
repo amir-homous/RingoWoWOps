@@ -1,0 +1,16 @@
+{
+  "profile": {
+    "name": "Amiringo",
+    "realm": {"name": "Spineshatter", "slug": "spineshatter"},
+    "level": 70,
+    "race": {"name": "Blood Elf"},
+    "character_class": {"name": "Paladin"},
+    "faction": {"name": "Horde"},
+    "active_spec": {"name": "Holy"},
+    "average_item_level": 115,
+    "equipped_item_level": 112,
+    "last_modified": 1789660800000
+  },
+  "professions": {"primaries": [{"profession": {"name": "Alchemy"}}]},
+  "equipment": {"equipped_items": [{"item": {"id": 28770}, "name": "Naaru Lightmace", "slot": {"type": "MAIN_HAND", "name": "Main Hand"}, "level": {"value": 125}}]}
+}

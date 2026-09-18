@@ -111,15 +111,15 @@ class RaidHelperTests(unittest.TestCase):
         self.assertEqual(result["categories"]["unmatched_signup"], 6)
         self.assertEqual(result["categories"]["unmatched_wcl_participant_pug"], 1)
 
-    def test_v7_to_v8_preserves_existing_domains_and_foreign_keys(self):
+    def test_v7_to_current_preserves_existing_domains_and_foreign_keys(self):
         self.add_wcl()
         with closing(sqlite3.connect(self.db)) as conn:
             conn.execute("CREATE TABLE preserved(kind TEXT PRIMARY KEY)"); conn.executemany("INSERT INTO preserved VALUES(?)", [("farm",),("ledger",),("wcl",),("roster",)])
             conn.execute("DROP TABLE raid_helper_signups"); conn.execute("DROP TABLE raid_helper_import_batches")
-            conn.execute("DELETE FROM migration_history WHERE version=8"); conn.execute("PRAGMA user_version=7"); conn.commit()
+            conn.execute("DELETE FROM migration_history WHERE version>=8"); conn.execute("PRAGMA user_version=7"); conn.commit()
         result = self.import_fixture(); self.assertTrue(Path(result["backup"]).exists())
         with closing(sqlite3.connect(self.db)) as conn:
-            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 8)
+            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], importer.SCHEMA_VERSION)
             self.assertEqual(conn.execute("SELECT count(*) FROM preserved").fetchone()[0], 4)
             self.assertEqual(conn.execute("SELECT count(*) FROM wcl_fight_attendance").fetchone()[0], 9)
             self.assertEqual(conn.execute("PRAGMA foreign_key_check").fetchall(), [])
@@ -127,12 +127,12 @@ class RaidHelperTests(unittest.TestCase):
     def test_migration_rollback_and_newer_schema_rejection(self):
         with closing(sqlite3.connect(self.db)) as conn:
             conn.execute("DROP TABLE raid_helper_signups"); conn.execute("DROP TABLE raid_helper_import_batches")
-            conn.execute("DELETE FROM migration_history WHERE version=8"); conn.execute("PRAGMA user_version=7"); conn.commit()
+            conn.execute("DELETE FROM migration_history WHERE version>=8"); conn.execute("PRAGMA user_version=7"); conn.commit()
         with patch("import_to_sqlite._execute_script_without_implicit_commit", side_effect=RuntimeError("forced")):
             with self.assertRaisesRegex(RuntimeError, "forced"): self.import_fixture()
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 7)
-            conn.execute("PRAGMA user_version=9"); conn.commit()
+            conn.execute(f"PRAGMA user_version={importer.SCHEMA_VERSION + 1}"); conn.commit()
         with self.assertRaisesRegex(RuntimeError, "newer"): self.import_fixture()
 
     def test_cli_output_contains_no_private_fields(self):
