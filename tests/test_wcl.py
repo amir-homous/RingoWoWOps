@@ -52,6 +52,10 @@ class WclTests(unittest.TestCase):
         self.assertEqual(wcl.normalize_identity("ÁMIRINGO"), "amiringo")
         self.assertEqual(wcl.external_character_key("tbc-anniversary", "EU", "Spine-Shatter", "Amiringo"), "tbc-anniversary/eu/spineshatter/amiringo")
 
+    def test_actor_embedded_fights_are_supported(self):
+        fights = [{"id": 1}, {"id": 2}]
+        self.assertEqual(wcl._actor_fight_ids({"id": 7, "fights": [{"id": 2}, {"id": 999}]}, fights), {2})
+
     def test_offline_first_import_and_idempotency(self):
         with patch("wcl.fetch_fights", side_effect=AssertionError("network used")):
             first = self.run_import(); second = self.run_import()
@@ -122,8 +126,9 @@ class WclTests(unittest.TestCase):
     def test_v5_migration_backup_preserves_farm_and_ledger_rows(self):
         conn = sqlite3.connect(self.db); import_to_sqlite.apply_migrations(conn)
         conn.execute("CREATE TABLE preserved_marker(kind TEXT PRIMARY KEY)"); conn.executemany("INSERT INTO preserved_marker VALUES(?)", [("farm",), ("ledger",)])
+        conn.execute("DROP TABLE raid_event_reports"); conn.execute("DROP TABLE raid_events"); conn.execute("DROP TABLE roster_import_rejections"); conn.execute("DROP TABLE guild_characters"); conn.execute("DROP TABLE guild_members"); conn.execute("DROP TABLE guilds")
         conn.execute("DROP TABLE wcl_fight_attendance"); conn.execute("DROP TABLE wcl_report_participants"); conn.execute("DROP TABLE wcl_characters"); conn.execute("DROP TABLE wcl_fights"); conn.execute("DROP TABLE wcl_reports"); conn.execute("DROP TABLE wcl_import_batches")
-        conn.execute("DELETE FROM migration_history WHERE version=6"); conn.execute("PRAGMA user_version=5"); conn.commit(); conn.close()
+        conn.execute("DELETE FROM migration_history WHERE version>=6"); conn.execute("PRAGMA user_version=5"); conn.commit(); conn.close()
         result = self.run_import()
         self.assertTrue(Path(result["backup"]).exists())
         with closing(self.connect()) as conn: self.assertEqual(conn.execute("SELECT count(*) FROM preserved_marker").fetchone()[0], 2)

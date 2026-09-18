@@ -7,6 +7,10 @@ python tools\rwo.py doctor
 python tools\rwo.py update
 python tools\rwo.py upload
 python tools\rwo.py wcl-import --report-code RxkpqFn98jt1BYMr
+python tools\rwo.py roster-import --input data\private\guild_roster.csv
+python tools\rwo.py raid-event-upsert --source raid-helper --external-id 1546729699479257104 --title "Butter & Jam Hyjal" --instance Hyjal --game-version tbc-anniversary --region eu --realm spineshatter
+python tools\rwo.py raid-event-link-report --event-key raid-helper/1546729699479257104 --report-code RxkpqFn98jt1BYMr
+python tools\rwo.py attendance-report --event-key raid-helper/1546729699479257104
 ```
 
 Relative project paths are resolved from the repository, not the caller's current directory. `--config` may select another JSON configuration.
@@ -59,6 +63,10 @@ contacts only the configured Warcraft Logs V1 base. Offline WCL imports and all
 existing commands retain their local behavior. `doctor` reports WCL as available,
 missing, or not configured without failing the general health check. See
 [warcraft-logs.md](warcraft-logs.md).
+
+Roster and raid-event commands are local SQLite operations. The roster importer
+reports inserted, updated, unchanged, and rejected row counts without printing
+Discord IDs or notes. See [guild-roster-attendance.md](guild-roster-attendance.md).
 
 For an exclusive date-range endpoint, set optional `report_end_date` or use:
 

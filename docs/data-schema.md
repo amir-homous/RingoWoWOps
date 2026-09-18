@@ -51,7 +51,7 @@ Phase 1 legacy records without IDs receive deterministic content-based compatibi
 
 Invalid record types are retained in validation output as raw representations. Missing/incomplete fields generate inspectable warnings rather than silent deletion.
 
-## SQLite schema v6
+## SQLite schema v7
 
 Core tables:
 
@@ -73,6 +73,12 @@ Core tables:
 - `wcl_characters`
 - `wcl_report_participants`
 - `wcl_fight_attendance`
+- `guilds`
+- `guild_members`
+- `guild_characters`
+- `roster_import_rejections`
+- `raid_events`
+- `raid_event_reports`
 
 Core records use typed columns and `record_id` primary keys. Source identities preserve exact character and realm strings and are never automatically merged. Child tables may reference a source session. Scope/time indexes support report queries.
 
@@ -150,3 +156,17 @@ Display names and realms remain separately available. Guild membership is true
 only for keys explicitly listed in local configuration; unknown/PUG characters
 remain first-class participants. Attendance comes from WCL fight actor lists, not
 Raid-Helper signups.
+
+## Guild roster and event attendance
+
+Schema v7 separates a real guild member from their characters. Guild identity
+includes game version, region, and normalized realm, so a future Classic Forever
+Butter & Jam context cannot collide with TBC Anniversary. `guild_characters`
+uses the same external key as `wcl_characters`; the shared key permits a clean
+join while allowing manually entered characters that have not appeared in a log.
+
+Raid events are manual metadata keyed by `<source>/<external-event-id>`.
+`raid_event_reports` is a many-to-many link with a composite primary key and
+foreign keys to both the event and WCL report. Roster rejections retain review
+evidence locally. Member Discord IDs and notes stay in SQLite/private CSV and are
+excluded from attendance output and upload ZIP candidates.

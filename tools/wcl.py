@@ -106,7 +106,11 @@ def atomic_archive(raw: bytes, destination: Path) -> None:
 
 def _actor_fight_ids(actor: dict[str, Any], fights: list[dict[str, Any]]) -> set[int]:
     actor_id = actor.get("id")
-    attended = set()
+    valid_fight_ids = {int(fight["id"]) for fight in fights if "id" in fight}
+    attended = {
+        int(item["id"]) for item in (actor.get("fights") or [])
+        if isinstance(item, dict) and item.get("id") is not None and int(item["id"]) in valid_fight_ids
+    }
     for fight in fights:
         if actor_id in (fight.get("friendlyPlayers") or []):
             attended.add(int(fight["id"]))

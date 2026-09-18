@@ -31,8 +31,9 @@ Historical leveling use cases remain supported, but recommendations must eventua
 
 Phases 1 and 2A are runtime-verified. Phase 3A Farm Run Core and native dashboard are implemented in source, awaiting WoW validation:
 
-- addon schema v5 / addon v0.5.0; SQLite schema v6 / ledger and farm record schemas v1
+- addon schema v5 / addon v0.5.0; SQLite schema v7 / ledger and farm record schemas v1
 - optional local-first Warcraft Logs V1 report, fight, character, and actual-attendance import
+- local guild member/character roster, manual raid events, and WCL attendance summaries
 - preset-ready Stratholme farm lifecycle, immutable transition evidence, Live Run / History / Settings dashboard
 - manual cash entries, append-only voids, strict copper syntax and conservative reconciliation
 - sessions, snapshots, notes, activities, and structured events
@@ -82,6 +83,8 @@ Commands:
 - `doctor`: validate paths, configuration, and database migration status.
 - `upload`: run an update and create a ZIP with a manifest. It prints a privacy warning because raw history and notes are included.
 - `wcl-import`: import a public Warcraft Logs V1 report live or from local JSON; it does not use the Addon.
+- `roster-import`: import a private manual guild roster CSV.
+- `raid-event-upsert`, `raid-event-link-report`, `attendance-report`: maintain local raid metadata and summarize linked WCL evidence.
 
 See [docs/cli.md](docs/cli.md) for configuration and report-scope details.
 
@@ -170,3 +173,4 @@ The original MVP success questions remain useful regression goals:
 - [CLI and reporting](docs/cli.md)
 - [Roadmap](docs/roadmap.md)
 - [Warcraft Logs importer](docs/warcraft-logs.md)
+- [Guild roster and raid attendance](docs/guild-roster-attendance.md)
