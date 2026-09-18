@@ -126,7 +126,7 @@ class WclTests(unittest.TestCase):
     def test_v5_migration_backup_preserves_farm_and_ledger_rows(self):
         conn = sqlite3.connect(self.db); import_to_sqlite.apply_migrations(conn)
         conn.execute("CREATE TABLE preserved_marker(kind TEXT PRIMARY KEY)"); conn.executemany("INSERT INTO preserved_marker VALUES(?)", [("farm",), ("ledger",)])
-        conn.execute("DROP TABLE raid_event_reports"); conn.execute("DROP TABLE raid_events"); conn.execute("DROP TABLE roster_import_rejections"); conn.execute("DROP TABLE guild_characters"); conn.execute("DROP TABLE guild_members"); conn.execute("DROP TABLE guilds")
+        conn.execute("DROP TABLE raid_helper_signups"); conn.execute("DROP TABLE raid_helper_import_batches"); conn.execute("DROP TABLE raid_event_reports"); conn.execute("DROP TABLE raid_events"); conn.execute("DROP TABLE roster_import_rejections"); conn.execute("DROP TABLE guild_characters"); conn.execute("DROP TABLE guild_members"); conn.execute("DROP TABLE guilds")
         conn.execute("DROP TABLE wcl_fight_attendance"); conn.execute("DROP TABLE wcl_report_participants"); conn.execute("DROP TABLE wcl_characters"); conn.execute("DROP TABLE wcl_fights"); conn.execute("DROP TABLE wcl_reports"); conn.execute("DROP TABLE wcl_import_batches")
         conn.execute("DELETE FROM migration_history WHERE version>=6"); conn.execute("PRAGMA user_version=5"); conn.commit(); conn.close()
         result = self.run_import()

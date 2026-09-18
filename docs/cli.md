@@ -11,6 +11,8 @@ python tools\rwo.py roster-import --input data\private\guild_roster.csv
 python tools\rwo.py raid-event-upsert --source raid-helper --external-id 1546729699479257104 --title "Butter & Jam Hyjal" --instance Hyjal --game-version tbc-anniversary --region eu --realm spineshatter
 python tools\rwo.py raid-event-link-report --event-key raid-helper/1546729699479257104 --report-code RxkpqFn98jt1BYMr
 python tools\rwo.py attendance-report --event-key raid-helper/1546729699479257104
+python tools\rwo.py raid-helper-import --event-id 1546729699479257104
+python tools\rwo.py raid-reconcile --event-key raid-helper/1546729699479257104
 ```
 
 Relative project paths are resolved from the repository, not the caller's current directory. `--config` may select another JSON configuration.
@@ -67,6 +69,11 @@ missing, or not configured without failing the general health check. See
 Roster and raid-event commands are local SQLite operations. The roster importer
 reports inserted, updated, unchanged, and rejected row counts without printing
 Discord IDs or notes. See [guild-roster-attendance.md](guild-roster-attendance.md).
+
+`raid-helper-import` contacts only the public event JSON endpoint and requires no
+bot token. Use `--offline-json` for deterministic replay. `raid-reconcile`
+calculates signup-versus-WCL categories without storing mutable conclusions. See
+[raid-helper.md](raid-helper.md).
 
 For an exclusive date-range endpoint, set optional `report_end_date` or use:
 

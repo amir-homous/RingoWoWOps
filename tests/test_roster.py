@@ -52,12 +52,12 @@ class RosterTests(unittest.TestCase):
         self.wcl()
         with closing(sqlite3.connect(self.db)) as conn:
             conn.execute("CREATE TABLE preserved(kind TEXT PRIMARY KEY)"); conn.executemany("INSERT INTO preserved VALUES(?)", [("farm",),("ledger",)])
-            for table in ("raid_event_reports","raid_events","roster_import_rejections","guild_characters","guild_members","guilds"): conn.execute(f"DROP TABLE {table}")
-            conn.execute("DELETE FROM migration_history WHERE version=7"); conn.execute("PRAGMA user_version=6"); conn.commit()
+            for table in ("raid_helper_signups","raid_helper_import_batches","raid_event_reports","raid_events","roster_import_rejections","guild_characters","guild_members","guilds"): conn.execute(f"DROP TABLE {table}")
+            conn.execute("DELETE FROM migration_history WHERE version>=7"); conn.execute("PRAGMA user_version=6"); conn.commit()
         result = roster.import_roster(self.csv, self.db)
         self.assertTrue(Path(result["backup"]).exists())
         with closing(sqlite3.connect(self.db)) as conn:
-            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 7)
+            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], importer.SCHEMA_VERSION)
             self.assertEqual(conn.execute("SELECT count(*) FROM wcl_fights").fetchone()[0], 3)
             self.assertEqual(conn.execute("SELECT count(*) FROM preserved").fetchone()[0], 2)
             self.assertEqual(conn.execute("PRAGMA foreign_key_check").fetchall(), [])
@@ -68,7 +68,7 @@ class RosterTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,"forced"): roster.import_roster(self.csv,self.db)
         with closing(sqlite3.connect(self.db)) as conn:
             self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0],6); self.assertEqual(conn.execute("SELECT v FROM marker").fetchone()[0],"kept")
-            conn.execute("PRAGMA user_version=8"); conn.commit()
+            conn.execute(f"PRAGMA user_version={importer.SCHEMA_VERSION + 1}"); conn.commit()
         with self.assertRaisesRegex(RuntimeError,"newer"): roster.import_roster(self.csv,self.db)
 
     def test_roster_idempotency_updates_multiple_characters_and_uniqueness(self):

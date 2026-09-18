@@ -58,6 +58,10 @@ is never classified as a guild member. A missing roster character is not called
 absent. Event existence is neither signup evidence nor attendance; actual
 attendance is only imported WCL fight evidence.
 
-Deferred work includes Raid-Helper and Notion APIs, signup notes, gear/item level,
+Deferred work includes authenticated Raid-Helper and Notion APIs, signup editing, gear/item level,
 WCL rankings/parses, Classic Forever APIs, Discord bots, automated roster
 selection, and Addon integration.
+
+Public Raid-Helper event import and reconciliation are described separately in
+[raid-helper.md](raid-helper.md). Bot-authenticated/private event access remains
+deferred.

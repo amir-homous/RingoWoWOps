@@ -10,6 +10,9 @@
   "report_timezone": "Asia/Tehran",
   "report_character": null,
   "report_realm": null,
+  "raid_helper": {
+    "raw_dir": "data\\raw\\raid-helper"
+  },
   "wcl": {
     "base_url": "https://fresh.warcraftlogs.com/v1",
     "api_key_env": "WCL_V1_KEY",
