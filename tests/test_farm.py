@@ -201,7 +201,7 @@ class FarmTests(unittest.TestCase):
         result=importer.import_directory(out,db); self.assertTrue(Path(result['backup']).exists())
         self.assertIsNone(importer.import_directory(out,db)['backup'])
         with closing(sqlite3.connect(db)) as conn:
-            self.assertEqual(conn.execute('PRAGMA user_version').fetchone()[0],5)
+            self.assertEqual(conn.execute('PRAGMA user_version').fetchone()[0],importer.SCHEMA_VERSION)
             self.assertEqual(conn.execute('PRAGMA foreign_key_check').fetchall(),[])
 
     def test_failed_farm_batch_rolls_back(self):
@@ -224,7 +224,7 @@ class FarmTests(unittest.TestCase):
             try:
                 with self.assertRaisesRegex(sqlite3.OperationalError,'locked'): importer.import_directory(out,db)
             finally: conn.rollback()
-            conn.execute('PRAGMA user_version=6'); conn.commit()
+            conn.execute(f'PRAGMA user_version={importer.SCHEMA_VERSION + 1}'); conn.commit()
         with self.assertRaisesRegex(RuntimeError,'newer'): importer.import_directory(out,db)
 
     def test_ui_buttons_timer_and_old_commands(self):

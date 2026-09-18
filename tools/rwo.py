@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -11,6 +12,7 @@ from pathlib import Path
 from generate_daily_report import resolve_timezone
 from import_to_sqlite import SCHEMA_VERSION
 from data_model import DATASETS
+import wcl
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -127,6 +129,12 @@ def doctor(config: dict) -> None:
     print(f"Database: {db_state} - {paths['db']}")
     ok &= not db_state.startswith("ERROR")
     print(f"Report scope: calendar day, timezone={config.get('report_timezone', 'UTC')}, character={config.get('report_character', 'auto')}, realm={config.get('report_realm', 'auto')}")
+    wcl_config = config.get("wcl")
+    if not wcl_config:
+        print("Warcraft Logs V1: not configured (optional)")
+    else:
+        env_name = str(wcl_config.get("api_key_env") or "WCL_V1_KEY")
+        print(f"Warcraft Logs V1: {'available' if os.getenv(env_name) else 'missing'} (optional; credential environment variable {env_name})")
     if not ok:
         raise SystemExit(1)
 
@@ -164,10 +172,32 @@ def make_upload_zip(config: dict) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="RingoWoWOps local helper CLI")
-    parser.add_argument("command", choices=["update", "doctor", "upload"])
+    parser.add_argument("command", choices=["update", "doctor", "upload", "wcl-import"])
     parser.add_argument("--config", default=str(DEFAULT_CONFIG))
+    parser.add_argument("--report-code")
+    parser.add_argument("--offline-json")
     args = parser.parse_args()
     config = load_config(Path(args.config))
+    if args.command == "wcl-import":
+        if not args.report_code:
+            parser.error("wcl-import requires --report-code")
+        paths = configured_paths(config)
+        try:
+            result = wcl.run_import(args.report_code, config, paths["db"], offline_json=Path(args.offline_json).resolve() if args.offline_json else None)
+        except wcl.WclError as exc:
+            print(f"WCL import failed: {exc}", file=sys.stderr)
+            raise SystemExit(1) from None
+        print(f"WCL report: {result['report_code']}")
+        print(f"Title/owner: {result['title'] or 'unavailable'} / {result['owner'] or 'unavailable'}")
+        print(f"Start/end: {result['start']} / {result['end']}")
+        print(f"Fights: {result['fights']}; characters: {result['characters']}; attendance: {result['attendance']}")
+        print(f"Inserted: {sum(result['inserted'].values())}; unchanged: {result['unchanged']}")
+        print(f"Raw archive: {result['archive']}")
+        for name in ("Amiringo", "Medalisa", "Divinegg"):
+            suffix = "/" + wcl.normalize_identity(name)
+            key = next((item for item in result["character_keys"] if item.endswith(suffix)), None)
+            print(f"{name}: {'found - ' + key if key else 'not found'}")
+        return
     {"update": update, "doctor": doctor, "upload": make_upload_zip}[args.command](config)
 
 

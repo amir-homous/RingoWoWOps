@@ -6,6 +6,7 @@
 python tools\rwo.py doctor
 python tools\rwo.py update
 python tools\rwo.py upload
+python tools\rwo.py wcl-import --report-code RxkpqFn98jt1BYMr
 ```
 
 Relative project paths are resolved from the repository, not the caller's current directory. `--config` may select another JSON configuration.
@@ -52,6 +53,12 @@ SQLite backup. Newer database schemas are rejected.
 The financial CSVs are included in local ZIPs as `private_financial_history`.
 No network operation occurs. See [gold-ledger.md](gold-ledger.md) for privacy and
 in-game entry/undo instructions.
+
+The exception is the explicitly requested optional `wcl-import` live command. It
+contacts only the configured Warcraft Logs V1 base. Offline WCL imports and all
+existing commands retain their local behavior. `doctor` reports WCL as available,
+missing, or not configured without failing the general health check. See
+[warcraft-logs.md](warcraft-logs.md).
 
 For an exclusive date-range endpoint, set optional `report_end_date` or use:
 
