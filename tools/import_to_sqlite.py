@@ -13,7 +13,7 @@ from ledger import LEDGER_DATASETS, ENTRY_FIELDS, VOID_FIELDS, normalize_ledger,
 import farm
 
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 TABLE_COLUMNS = {
     "sessions": (
@@ -107,6 +107,22 @@ def _execute_script_without_implicit_commit(conn: sqlite3.Connection, script: st
             statement = ""
     if statement.strip():
         conn.execute(statement)
+
+
+def _scrub_raid_helper_private_data(conn: sqlite3.Connection) -> None:
+    private = {"userid", "note", "notes", "comment", "comments"}
+    rows = conn.execute("SELECT signup_key,raw_record FROM raid_helper_signups").fetchall()
+    for signup_key, raw_record in rows:
+        try:
+            value = json.loads(raw_record)
+        except (TypeError, json.JSONDecodeError):
+            value = {}
+        if isinstance(value, dict):
+            value = {key: item for key, item in value.items() if key.casefold() not in private}
+        else:
+            value = {}
+        conn.execute("UPDATE raid_helper_signups SET discord_user_id=NULL,raw_record=? WHERE signup_key=?",
+                     (json.dumps(value, ensure_ascii=False, sort_keys=True), signup_key))
 
 
 def apply_migrations(conn: sqlite3.Connection) -> None:
@@ -234,6 +250,10 @@ def apply_migrations(conn: sqlite3.Connection) -> None:
         if current < 9:
             _execute_script_without_implicit_commit(conn, Path(__file__).with_name("blizzard_schema.sql").read_text(encoding="utf-8"))
             conn.execute("INSERT OR REPLACE INTO migration_history(version,name,applied_at) VALUES(9,'blizzard_character_profiles',?)", (utc_now(),))
+        if current < 10:
+            _execute_script_without_implicit_commit(conn, Path(__file__).with_name("private_identity_schema.sql").read_text(encoding="utf-8"))
+            _scrub_raid_helper_private_data(conn)
+            conn.execute("INSERT OR REPLACE INTO migration_history(version,name,applied_at) VALUES(10,'private_raid_identity',?)", (utc_now(),))
         if "error_key" not in _table_columns(conn, "validation_errors"):
             conn.execute("ALTER TABLE validation_errors ADD COLUMN error_key TEXT")
         for row in conn.execute("SELECT id,import_batch_id,dataset,source_record_index,code,field,message FROM validation_errors WHERE error_key IS NULL"):

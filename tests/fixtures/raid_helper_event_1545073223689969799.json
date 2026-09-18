@@ -1,0 +1,14 @@
+{
+  "id": "1545073223689969799",
+  "title": "SSC TK Saturday 16:30",
+  "displayTitle": "SSC TK",
+  "date": "2026-09-05",
+  "startTime": 1788622200,
+  "endTime": 1788622200,
+  "lastUpdated": "sanitized-fixture",
+  "signUps": [
+    {"id": "second-1", "position": 0, "name": "Fixturetank", "status": "Primary", "className": "Warrior", "roleName": "Tank"},
+    {"id": "second-2", "position": 1, "name": "Fixturehealer", "status": "Primary", "className": "Priest", "roleName": "Healer"},
+    {"id": "second-3", "position": 2, "name": "Fixturebench", "status": "Bench", "className": "Mage", "roleName": "DPS"}
+  ]
+}

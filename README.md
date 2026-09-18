@@ -31,7 +31,7 @@ Historical leveling use cases remain supported, but recommendations must eventua
 
 Phases 1 and 2A are runtime-verified. Phase 3A Farm Run Core and native dashboard are implemented in source, awaiting WoW validation:
 
-- addon schema v5 / addon v0.5.0; SQLite schema v9 / ledger and farm record schemas v1
+- addon schema v5 / addon v0.5.0; SQLite schema v10 / ledger and farm record schemas v1
 - optional local-first Warcraft Logs V1 report, fight, character, and actual-attendance import
 - local-first Blizzard character profile snapshots via client-credentials OAuth (`rwo.py blizzard-import`); Classic Anniversary currently records the official API's unsupported response without scraping
 - local guild member/character roster, manual raid events, and WCL attendance summaries

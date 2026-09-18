@@ -19,15 +19,29 @@ The response is archived atomically at
 `data/raw/raid-helper/<event-id>/event.json`. This archive is sanitized: Discord
 user IDs, notes/comments, server/channel/leader IDs, creator/co-leader data, and
 announcements are removed. The raw directory is ignored by Git. Private signup
-fields are retained only in the ignored local SQLite database and never printed
-by normal CLI output or included in upload ZIP candidates.
+fields are never written to the sanitized archive. A signup Discord ID is used
+transiently for exact private-roster matching and is not stored raw in the
+signup table or its raw-record JSON. When `RWO_IDENTITY_HASH_KEY` is set, only a
+keyed HMAC is retained for local diagnostics. The key itself must remain an
+environment secret. Private signup notes may remain in the ignored local SQLite
+database, but are never printed by normal CLI output or included in upload ZIP
+candidates.
 
 Repeated identical imports are idempotent. Source status, class, role, spec,
-display name, timestamp, position, optional Discord ID, and optional notes are
-preserved. Resolution never uses fuzzy matching. It tries exact Discord ID,
-exact character key, then exact normalized character name within the event's
-game-version/region/realm namespace. A name such as `Eggslayer/Mosesa` remains
-one unresolved signup unless the API supplies an explicit character field.
+display name, timestamp, position, and optional notes are preserved. Resolution
+never uses fuzzy, partial, or guessed matching. Its strict order is: exact
+transient Discord ID to the private roster; an explicit external character key;
+exact normalized character name within the event's game-version/region/realm;
+then an explicitly maintained private alias. A name such as
+`Eggslayer/Mosesa` remains one unresolved signup unless an exact private alias
+is configured.
+
+Optional aliases live in the ignored file configured by
+`raid_helper.identity_aliases_file` (normally
+`data/private/raid_helper_identity_aliases.json`). The JSON object contains an
+`aliases` list. Each entry supplies `game_version`, `region`, `realm`,
+`raid_helper_name`, and one canonical `external_character_key`. Conflicting or
+malformed aliases are rejected; aliases never create roster membership.
 
 Reconciliation calculates, rather than stores, signed-up-and-attended,
 signed-up-without-WCL-attendance, bench-attended, tentative-attended,

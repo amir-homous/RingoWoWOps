@@ -176,12 +176,18 @@ excluded from attendance output and upload ZIP candidates.
 ## Raid-Helper public signup evidence
 
 Schema v8 adds content-addressed public-event import batches and one current
-source row per event/signup identity. Signup rows retain exact source status,
-class, role, spec, name, timestamps, optional Discord ID, optional notes, and the
-private raw record. Discord IDs, notes, and raw records remain SQLite-only.
+source row per event/signup identity. Schema v10 tightens the private identity
+boundary: signup rows retain exact source status, class, role, spec, name,
+timestamps, optional notes, and a sanitized raw record, but never a raw Discord
+ID. If a private runtime HMAC key is configured, `discord_user_hash` contains
+only the keyed SHA-256 digest. The raw ID is used transiently during import.
+Migration v10 clears historical signup Discord IDs and removes private identity
+fields from historical signup raw records.
 
-Resolution references existing member/character rows and uses exact Discord ID,
-then exact external character identity, then exact normalized character name in
-the event namespace. Unresolved source rows remain present. Reconciliation is
-calculated from signup, roster, event-report, and WCL attendance evidence; it is
-not stored as mutable truth.
+Resolution references existing member/character rows and uses exact transient
+Discord ID, then an explicit external character key, then exact normalized
+character name in the event namespace, then an explicit private alias. Fuzzy
+and partial matching are not allowed. Conflicting ownership and unresolved
+source rows remain unresolved. Reconciliation is calculated from signup,
+roster, event-report, and WCL attendance evidence; it is not stored as mutable
+truth.

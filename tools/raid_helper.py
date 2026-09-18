@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -17,6 +18,7 @@ from import_to_sqlite import apply_migrations, backup_database
 from wcl import normalize_identity
 
 BASE_URL = "https://raid-helper.xyz/api/v4/events"
+PRIVATE_SIGNUP_FIELDS = {"userid", "note", "notes", "comment", "comments"}
 
 
 class RaidHelperError(RuntimeError):
@@ -67,6 +69,10 @@ def sanitized_response(data: dict[str, Any]) -> dict[str, Any]:
     return clean
 
 
+def sanitized_signup(item: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in item.items() if key.casefold() not in PRIVATE_SIGNUP_FIELDS}
+
+
 def atomic_archive(data: dict[str, Any], destination: Path) -> None:
     payload = (json.dumps(sanitized_response(data), ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -89,16 +95,77 @@ def _value(item: dict[str, Any], *names: str) -> str | None:
     return None
 
 
-def _resolve(conn: sqlite3.Connection, item: dict[str, Any], event: sqlite3.Row) -> tuple[str | None, str | None, str | None]:
+def _load_aliases(config: dict[str, Any]) -> dict[tuple[str, str, str, str], str]:
+    raid_config = config.get("raid_helper") or {}
+    configured = raid_config.get("identity_aliases_file")
+    if not configured:
+        return {}
+    path = Path(str(configured))
+    if not path.is_absolute():
+        path = Path(__file__).resolve().parents[1] / path
+    if not path.exists():
+        return {}
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        raise RaidHelperError("Private identity alias file is not valid JSON") from None
+    rows = document.get("aliases") if isinstance(document, dict) else None
+    if not isinstance(rows, list):
+        raise RaidHelperError("Private identity alias file must contain an aliases list")
+    aliases: dict[tuple[str, str, str, str], str] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            raise RaidHelperError("Private identity alias entries must be objects")
+        game = _value(row, "game_version")
+        region = _value(row, "region")
+        realm = _value(row, "realm")
+        alias = _value(row, "raid_helper_name", "alias")
+        character_key = _value(row, "external_character_key")
+        if not all((game, region, realm, alias, character_key)):
+            raise RaidHelperError("Private identity alias entry is missing required fields")
+        identity = (game.casefold(), region.casefold(), normalize_identity(realm), normalize_identity(alias))
+        if not identity[3]:
+            raise RaidHelperError("Private identity alias must normalize to a nonempty value")
+        previous = aliases.get(identity)
+        if previous and previous != character_key:
+            raise RaidHelperError("Private identity alias has conflicting targets")
+        aliases[identity] = character_key
+    return aliases
+
+
+def _identity_hash(discord_id: str | None, config: dict[str, Any]) -> str | None:
+    if not discord_id:
+        return None
+    env_name = str((config.get("raid_helper") or {}).get("identity_hash_key_env") or "RWO_IDENTITY_HASH_KEY")
+    key = os.getenv(env_name)
+    if not key:
+        return None
+    return hmac.new(key.encode("utf-8"), discord_id.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _resolve(conn: sqlite3.Connection, item: dict[str, Any], event: sqlite3.Row,
+             aliases: dict[tuple[str, str, str, str], str]) -> tuple[str | None, str | None, str | None]:
     discord_id = _value(item, "userId")
     if discord_id:
-        row = conn.execute("SELECT member_id FROM guild_members WHERE discord_user_id=?", (discord_id,)).fetchone()
-        if row:
-            member_id = row[0]
+        owners = conn.execute("""SELECT DISTINCT gm.member_id FROM guild_members gm
+            JOIN guild_characters gc ON gc.member_id=gm.member_id
+            WHERE gm.discord_user_id=? AND gc.game_version=? AND gc.region=? AND gc.normalized_realm=?""",
+            (discord_id, event["game_version"].casefold(), event["region"].casefold(), normalize_identity(event["realm"]))).fetchall()
+        if len(owners) > 1:
+            return None, None, "discord_id_conflict"
+        if len(owners) == 1:
+            member_id = owners[0][0]
             name = _value(item, "name") or ""
             chars = conn.execute("SELECT external_character_key,normalized_character_name FROM guild_characters WHERE member_id=?", (member_id,)).fetchall()
             exact = next((char[0] for char in chars if char[1] == normalize_identity(name)), None)
             return member_id, exact, "discord_id"
+    explicit_key = _value(item, "externalCharacterKey", "characterKey")
+    if explicit_key:
+        row = conn.execute("""SELECT member_id FROM guild_characters WHERE external_character_key=?
+            AND game_version=? AND region=? AND normalized_realm=?""",
+            (explicit_key, event["game_version"].casefold(), event["region"].casefold(), normalize_identity(event["realm"]))).fetchone()
+        if row:
+            return row[0], explicit_key, "external_character_key"
     name = _value(item, "name") or ""
     normalized = normalize_identity(name)
     if "/" in name or not normalized:
@@ -110,19 +177,31 @@ def _resolve(conn: sqlite3.Connection, item: dict[str, Any], event: sqlite3.Row)
     row = conn.execute("""SELECT member_id,external_character_key FROM guild_characters
         WHERE game_version=? AND region=? AND normalized_realm=? AND normalized_character_name=?""",
         (event["game_version"].casefold(), event["region"].casefold(), normalize_identity(event["realm"]), normalized)).fetchone()
-    return (row[0], row[1], "normalized_character") if row else (None, None, None)
+    if row:
+        return row[0], row[1], "normalized_character"
+    alias_key = aliases.get((event["game_version"].casefold(), event["region"].casefold(),
+                             normalize_identity(event["realm"]), normalized))
+    if alias_key:
+        row = conn.execute("""SELECT member_id FROM guild_characters WHERE external_character_key=?
+            AND game_version=? AND region=? AND normalized_realm=?""",
+            (alias_key, event["game_version"].casefold(), event["region"].casefold(), normalize_identity(event["realm"]))).fetchone()
+        if row:
+            return row[0], alias_key, "explicit_alias"
+    return None, None, None
 
 
-def import_event(event_id: str, raw: bytes, db_path: Path, archive: Path) -> dict[str, Any]:
+def import_event(event_id: str, raw: bytes, db_path: Path, archive: Path, config: dict[str, Any] | None = None) -> dict[str, Any]:
     event_id = validate_event_id(event_id); data = parse_response(raw, event_id)
+    config = config or {}
     atomic_archive(data, archive)
-    event_key = f"raid-helper/{event_id}"; source_hash = hashlib.sha256(raw).hexdigest()
+    sanitized_raw = (json.dumps(sanitized_response(data), ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+    event_key = f"raid-helper/{event_id}"; source_hash = hashlib.sha256(sanitized_raw).hexdigest()
     batch_id = "rh-" + hashlib.sha256(f"{event_key}\n{source_hash}".encode()).hexdigest()[:32]
     backup = backup_database(db_path)
     conn = sqlite3.connect(db_path, timeout=1.0); conn.row_factory = sqlite3.Row; conn.execute("PRAGMA foreign_keys=ON")
     counts = {"inserted": 0, "updated": 0, "unchanged": 0}
     try:
-        apply_migrations(conn); conn.execute("BEGIN IMMEDIATE"); now = utc_now()
+        apply_migrations(conn); conn.execute("BEGIN IMMEDIATE"); now = utc_now(); aliases = _load_aliases(config)
         existing = conn.execute("SELECT * FROM raid_events WHERE event_key=?", (event_key,)).fetchone()
         if existing is None:
             raise RaidHelperError(f"Raid event not found: {event_key}; create its local game/realm context first")
@@ -134,23 +213,28 @@ def import_event(event_id: str, raw: bytes, db_path: Path, archive: Path) -> dic
             external_id = _value(item, "id")
             identity = external_id or hashlib.sha256(json.dumps(item, sort_keys=True).encode()).hexdigest()[:24]
             signup_key = f"{event_key}/{identity}"
-            member_id, character_key, method = _resolve(conn, item, existing)
+            member_id, character_key, method = _resolve(conn, item, existing, aliases)
+            discord_hash = _identity_hash(_value(item, "userId"), config)
             values = (event_key, external_id, int(item["position"]) if item.get("position") is not None else index,
-                      name, normalize_identity(name), _value(item, "userId"), _value(item, "status") or "unknown",
+                      name, normalize_identity(name), None, _value(item, "status") or "unknown",
                       _value(item, "className", "cClassName"), _value(item, "roleName", "cRoleName"),
                       _value(item, "specName", "cSpecName"), _value(item, "notes", "note", "comments", "comment"),
                       _value(item, "entryTime"), member_id, character_key, method, batch_id,
-                      json.dumps(item, sort_keys=True, ensure_ascii=False))
+                      json.dumps(sanitized_signup(item), sort_keys=True, ensure_ascii=False), discord_hash)
             old = conn.execute("""SELECT event_key,external_signup_id,position,display_name,normalized_name,discord_user_id,
                 signup_status,class_name,role_name,spec_name,notes,signup_at,resolved_member_id,resolved_character_key,
-                resolution_method,import_batch_id,raw_record FROM raid_helper_signups WHERE signup_key=?""", (signup_key,)).fetchone()
+                resolution_method,import_batch_id,raw_record,discord_user_hash FROM raid_helper_signups WHERE signup_key=?""", (signup_key,)).fetchone()
             if old is None:
-                conn.execute("INSERT INTO raid_helper_signups VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (signup_key, *values)); counts["inserted"] += 1
+                conn.execute("""INSERT INTO raid_helper_signups
+                    (signup_key,event_key,external_signup_id,position,display_name,normalized_name,discord_user_id,
+                    signup_status,class_name,role_name,spec_name,notes,signup_at,resolved_member_id,resolved_character_key,
+                    resolution_method,import_batch_id,raw_record,discord_user_hash)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (signup_key, *values)); counts["inserted"] += 1
             elif tuple(old) == values: counts["unchanged"] += 1
             else:
                 conn.execute("""UPDATE raid_helper_signups SET position=?,display_name=?,normalized_name=?,discord_user_id=?,signup_status=?,
                     class_name=?,role_name=?,spec_name=?,notes=?,signup_at=?,resolved_member_id=?,resolved_character_key=?,resolution_method=?,
-                    import_batch_id=?,raw_record=? WHERE signup_key=?""", (values[2], *values[3:], signup_key)); counts["updated"] += 1
+                    import_batch_id=?,raw_record=?,discord_user_hash=? WHERE signup_key=?""", (values[2], *values[3:], signup_key)); counts["updated"] += 1
         conn.commit()
     except Exception:
         conn.rollback(); raise
@@ -164,7 +248,7 @@ def run_import(event_id: str, config: dict[str, Any], db_path: Path, *, offline_
     raw_dir = Path((config.get("raid_helper") or {}).get("raw_dir", "data/raw/raid-helper"))
     if not raw_dir.is_absolute(): raw_dir = Path(__file__).resolve().parents[1] / raw_dir
     archive = (raw_dir / str(event_id) / "event.json").resolve()
-    result = import_event(event_id, raw, db_path.resolve(), archive)
+    result = import_event(event_id, raw, db_path.resolve(), archive, config)
     return result
 
 

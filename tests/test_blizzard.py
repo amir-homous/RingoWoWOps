@@ -127,7 +127,7 @@ class BlizzardTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "forced"): import_to_sqlite.apply_migrations(conn)
                 self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 8)
         with closing(sqlite3.connect(self.db)) as conn:
-            conn.execute("PRAGMA user_version=10"); conn.commit()
+            conn.execute(f"PRAGMA user_version={import_to_sqlite.SCHEMA_VERSION + 1}"); conn.commit()
             with self.assertRaisesRegex(RuntimeError, "newer"): import_to_sqlite.apply_migrations(conn)
 
     def test_existing_domains_survive_v9(self):

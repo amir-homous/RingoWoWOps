@@ -11,7 +11,9 @@
   "report_character": null,
   "report_realm": null,
   "raid_helper": {
-    "raw_dir": "data\\raw\\raid-helper"
+    "raw_dir": "data\\raw\\raid-helper",
+    "identity_aliases_file": "data\\private\\raid_helper_identity_aliases.json",
+    "identity_hash_key_env": "RWO_IDENTITY_HASH_KEY"
   },
   "blizzard": {
     "token_url": "https://oauth.battle.net/token",

@@ -1,4 +1,6 @@
 import io
+import hashlib
+import hmac
 import json
 import sqlite3
 import subprocess
@@ -22,6 +24,8 @@ EVENT_KEY = f"raid-helper/{EVENT_ID}"
 REPORT = "RxkpqFn98jt1BYMr"
 RH_FIXTURE = ROOT / "tests/fixtures/raid_helper_event.json"
 WCL_FIXTURE = ROOT / "tests/fixtures/wcl_report_fights.json"
+SECOND_EVENT_ID = "1545073223689969799"
+SECOND_RH_FIXTURE = ROOT / "tests/fixtures/raid_helper_event_1545073223689969799.json"
 
 
 class FakeResponse:
@@ -75,15 +79,82 @@ class RaidHelperTests(unittest.TestCase):
         self.assertEqual(medalisa[0], "character_key"); self.assertTrue(medalisa[1].endswith("/medalisa"))
         self.assertEqual(slash, (None, None)); self.assertEqual(divine, (None, None))
 
-    def test_private_fields_preserved_in_database_but_removed_from_archive(self):
+    def test_private_id_is_hmac_only_and_removed_from_raw_storage(self):
         data = json.loads(RH_FIXTURE.read_text(encoding="utf-8")); data["signUps"][0]["userId"] = "111111111111111111"; data["signUps"][0]["notes"] = "private test note"
         private = self.base / "private.json"; private.write_text(json.dumps(data), encoding="utf-8")
-        raid_helper.run_import(EVENT_ID, self.config, self.db, offline_json=private)
+        with patch.dict("os.environ", {"RWO_IDENTITY_HASH_KEY": "private-test-key"}):
+            raid_helper.run_import(EVENT_ID, self.config, self.db, offline_json=private)
         archive = json.loads(self.archive.read_text(encoding="utf-8"))
         self.assertNotIn("userId", archive["signUps"][0]); self.assertNotIn("notes", archive["signUps"][0])
         with closing(sqlite3.connect(self.db)) as conn:
-            row = conn.execute("SELECT discord_user_id,notes FROM raid_helper_signups WHERE display_name='Amiringo'").fetchone()
-        self.assertEqual(row, ("111111111111111111", "private test note"))
+            row = conn.execute("SELECT discord_user_id,discord_user_hash,notes,raw_record FROM raid_helper_signups WHERE display_name='Amiringo'").fetchone()
+        expected = hmac.new(b"private-test-key", b"111111111111111111", hashlib.sha256).hexdigest()
+        self.assertEqual(row[:3], (None, expected, "private test note"))
+        self.assertNotIn("111111111111111111", row[3]); self.assertNotIn("userId", row[3]); self.assertNotIn("private test note", row[3])
+
+    def test_discord_identity_multiple_characters_and_display_mismatch(self):
+        with closing(sqlite3.connect(self.db)) as conn:
+            guild_id = conn.execute("SELECT guild_id FROM guild_members WHERE member_id='member-amir'").fetchone()[0]
+            conn.execute("INSERT INTO guild_characters VALUES('tbc-anniversary/eu/spineshatter/amiringoalt',?,'member-amir','tbc-anniversary','eu','spineshatter','spineshatter','Amiringoalt','amiringoalt',NULL,NULL,'alt','active','now','now')", (guild_id,))
+            conn.commit()
+        data = json.loads(RH_FIXTURE.read_text(encoding="utf-8")); data["signUps"][0].update(userId="111111111111111111", name="CompletelyDifferent")
+        private = self.base / "mismatch.json"; private.write_text(json.dumps(data), encoding="utf-8")
+        raid_helper.run_import(EVENT_ID, self.config, self.db, offline_json=private)
+        with closing(sqlite3.connect(self.db)) as conn:
+            row = conn.execute("SELECT resolved_member_id,resolved_character_key,resolution_method FROM raid_helper_signups WHERE display_name='CompletelyDifferent'").fetchone()
+        self.assertEqual(row, ("member-amir", None, "discord_id"))
+
+    def test_missing_discord_exact_name_and_no_fuzzy_matching(self):
+        data = json.loads(RH_FIXTURE.read_text(encoding="utf-8")); data["signUps"][0].pop("userId", None); data["signUps"][0]["name"] = "Amiring"
+        private = self.base / "no-fuzzy.json"; private.write_text(json.dumps(data), encoding="utf-8")
+        raid_helper.run_import(EVENT_ID, self.config, self.db, offline_json=private)
+        with closing(sqlite3.connect(self.db)) as conn:
+            fuzzy = conn.execute("SELECT resolved_member_id,resolved_character_key FROM raid_helper_signups WHERE display_name='Amiring'").fetchone()
+            exact = conn.execute("SELECT resolution_method FROM raid_helper_signups WHERE display_name='Medalisa'").fetchone()
+        self.assertEqual(fuzzy, (None, None)); self.assertEqual(exact[0], "character_key")
+
+    def test_explicit_external_character_key_precedes_display_name(self):
+        data = json.loads(RH_FIXTURE.read_text(encoding="utf-8")); data["signUps"][0].update(name="DifferentName", externalCharacterKey="tbc-anniversary/eu/spineshatter/divinegg")
+        private = self.base / "explicit-key.json"; private.write_text(json.dumps(data), encoding="utf-8")
+        raid_helper.run_import(EVENT_ID, self.config, self.db, offline_json=private)
+        with closing(sqlite3.connect(self.db)) as conn:
+            row = conn.execute("SELECT resolved_character_key,resolution_method FROM raid_helper_signups WHERE display_name='DifferentName'").fetchone()
+        self.assertEqual(row, ("tbc-anniversary/eu/spineshatter/divinegg", "external_character_key"))
+
+    def test_conflicting_discord_ownership_stays_unresolved(self):
+        with closing(sqlite3.connect(self.db)) as conn:
+            conn.execute("INSERT INTO guilds VALUES('g-other','Other','other','tbc-anniversary','eu','spineshatter','spineshatter',1)")
+            conn.execute("INSERT INTO guild_members VALUES('member-other','g-other','Other','other','111111111111111111','active',NULL,'now','now')")
+            conn.execute("INSERT INTO guild_characters VALUES('tbc-anniversary/eu/spineshatter/other','g-other','member-other','tbc-anniversary','eu','spineshatter','spineshatter','Other','other',NULL,NULL,'main','active','now','now')")
+            conn.commit()
+        data = json.loads(RH_FIXTURE.read_text(encoding="utf-8")); data["signUps"][0]["userId"] = "111111111111111111"
+        private = self.base / "conflict.json"; private.write_text(json.dumps(data), encoding="utf-8")
+        raid_helper.run_import(EVENT_ID, self.config, self.db, offline_json=private)
+        with closing(sqlite3.connect(self.db)) as conn:
+            row = conn.execute("SELECT resolved_member_id,resolved_character_key,resolution_method FROM raid_helper_signups WHERE display_name='Amiringo'").fetchone()
+        self.assertEqual(row, (None, None, "discord_id_conflict"))
+
+    def test_alias_matches_only_when_explicitly_configured(self):
+        data = json.loads(RH_FIXTURE.read_text(encoding="utf-8")); data["signUps"][0]["name"] = "ExplicitAlias"
+        private = self.base / "alias-event.json"; private.write_text(json.dumps(data), encoding="utf-8")
+        raid_helper.run_import(EVENT_ID, self.config, self.db, offline_json=private)
+        aliases = self.base / "aliases.json"
+        aliases.write_text(json.dumps({"aliases": [{"game_version":"tbc-anniversary","region":"eu","realm":"spineshatter","raid_helper_name":"ExplicitAlias","external_character_key":"tbc-anniversary/eu/spineshatter/divinegg"}]}), encoding="utf-8")
+        with_alias = {"raid_helper": {"raw_dir": str(self.base / "raw"), "identity_aliases_file": str(aliases)}}
+        raid_helper.run_import(EVENT_ID, with_alias, self.db, offline_json=private)
+        with closing(sqlite3.connect(self.db)) as conn:
+            row = conn.execute("SELECT resolved_character_key,resolution_method FROM raid_helper_signups WHERE display_name='ExplicitAlias'").fetchone()
+        self.assertEqual(row, ("tbc-anniversary/eu/spineshatter/divinegg", "explicit_alias"))
+
+    def test_both_real_event_shapes_use_sanitized_fixtures(self):
+        second_db = self.base / "second.sqlite"
+        roster.import_roster(self.roster_csv, second_db)
+        roster.upsert_event(second_db, source="raid-helper", external_id=SECOND_EVENT_ID, title="SSC TK Saturday 16:30",
+                            scheduled_at="2026-09-05", instance="SSC/TK", game_version="tbc-anniversary", region="eu", realm="spineshatter")
+        result = raid_helper.run_import(SECOND_EVENT_ID, self.config, second_db, offline_json=SECOND_RH_FIXTURE)
+        self.assertEqual(result["signups"], 3)
+        text = SECOND_RH_FIXTURE.read_text(encoding="utf-8")
+        self.assertNotIn("userId", text); self.assertNotIn("discord", text.casefold()); self.assertNotIn("note", text.casefold())
 
     def test_atomic_archive_failure_preserves_previous_and_database(self):
         self.archive.parent.mkdir(parents=True); self.archive.write_text('{"kept":true}', encoding="utf-8")
@@ -122,6 +193,22 @@ class RaidHelperTests(unittest.TestCase):
             self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], importer.SCHEMA_VERSION)
             self.assertEqual(conn.execute("SELECT count(*) FROM preserved").fetchone()[0], 4)
             self.assertEqual(conn.execute("SELECT count(*) FROM wcl_fight_attendance").fetchone()[0], 9)
+            self.assertEqual(conn.execute("PRAGMA foreign_key_check").fetchall(), [])
+
+    def test_v9_migration_scrubs_historical_raw_discord_ids(self):
+        self.import_fixture()
+        with closing(sqlite3.connect(self.db)) as conn:
+            signup_key = conn.execute("SELECT signup_key FROM raid_helper_signups ORDER BY signup_key LIMIT 1").fetchone()[0]
+            conn.execute("UPDATE raid_helper_signups SET discord_user_id='historical-private-id',raw_record=? WHERE signup_key=?",
+                         ('{"name":"Fixture","userId":"historical-private-id","notes":"private"}', signup_key))
+            conn.execute("DELETE FROM migration_history WHERE version=10"); conn.execute("PRAGMA user_version=9"); conn.commit()
+            # Recreate the v9 shape so the v10 ALTER TABLE is exercised.
+            conn.execute("DROP INDEX idx_raid_helper_signups_discord_hash")
+            conn.execute("ALTER TABLE raid_helper_signups DROP COLUMN discord_user_hash"); conn.commit()
+            importer.apply_migrations(conn)
+            row = conn.execute("SELECT discord_user_id,raw_record,discord_user_hash FROM raid_helper_signups WHERE signup_key=?", (signup_key,)).fetchone()
+            self.assertIsNone(row[0]); self.assertNotIn("historical-private-id", row[1]); self.assertNotIn("userId", row[1]); self.assertIsNone(row[2])
+            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 10)
             self.assertEqual(conn.execute("PRAGMA foreign_key_check").fetchall(), [])
 
     def test_migration_rollback_and_newer_schema_rejection(self):
