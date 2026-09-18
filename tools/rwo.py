@@ -13,6 +13,7 @@ from generate_daily_report import resolve_timezone
 from import_to_sqlite import SCHEMA_VERSION
 from data_model import DATASETS
 import wcl
+import roster
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -172,10 +173,20 @@ def make_upload_zip(config: dict) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="RingoWoWOps local helper CLI")
-    parser.add_argument("command", choices=["update", "doctor", "upload", "wcl-import"])
+    parser.add_argument("command", choices=["update", "doctor", "upload", "wcl-import", "roster-import", "raid-event-upsert", "raid-event-link-report", "attendance-report"])
     parser.add_argument("--config", default=str(DEFAULT_CONFIG))
     parser.add_argument("--report-code")
     parser.add_argument("--offline-json")
+    parser.add_argument("--input")
+    parser.add_argument("--source")
+    parser.add_argument("--external-id")
+    parser.add_argument("--event-key")
+    parser.add_argument("--title")
+    parser.add_argument("--scheduled-at")
+    parser.add_argument("--instance")
+    parser.add_argument("--game-version")
+    parser.add_argument("--region")
+    parser.add_argument("--realm")
     args = parser.parse_args()
     config = load_config(Path(args.config))
     if args.command == "wcl-import":
@@ -198,6 +209,41 @@ def main() -> None:
             key = next((item for item in result["character_keys"] if item.endswith(suffix)), None)
             print(f"{name}: {'found - ' + key if key else 'not found'}")
         return
+    paths = configured_paths(config)
+    try:
+        if args.command == "roster-import":
+            if not args.input: parser.error("roster-import requires --input")
+            result = roster.import_roster(Path(args.input).resolve(), paths["db"])
+            print("Roster import: " + "; ".join(f"{key}={result[key]}" for key in ("inserted", "updated", "unchanged", "rejected")))
+            return
+        if args.command == "raid-event-upsert":
+            required = {"--source": args.source, "--external-id": args.external_id, "--title": args.title,
+                        "--game-version": args.game_version, "--region": args.region, "--realm": args.realm}
+            missing = [flag for flag, value in required.items() if not value]
+            if missing: parser.error("raid-event-upsert requires " + ", ".join(missing))
+            result = roster.upsert_event(paths["db"], source=args.source, external_id=args.external_id, title=args.title,
+                                         scheduled_at=args.scheduled_at, instance=args.instance, game_version=args.game_version,
+                                         region=args.region, realm=args.realm)
+            print(f"Raid event: {result['event_key']}; {result['action']}")
+            return
+        if args.command == "raid-event-link-report":
+            if not args.event_key or not args.report_code: parser.error("raid-event-link-report requires --event-key and --report-code")
+            print(f"Raid event report link: {args.event_key}; report={args.report_code}; {roster.link_report(paths['db'], args.event_key, args.report_code)}")
+            return
+        if args.command == "attendance-report":
+            if not args.event_key: parser.error("attendance-report requires --event-key")
+            result = roster.attendance_report(paths["db"], args.event_key)
+            event = result["event"]
+            print(f"Raid event: {event['event_key']} - {event['title']}; instance={event['instance'] or 'unspecified'}")
+            for item in result["participants"]:
+                category = "guild" if item["matched_guild"] else "unmatched/PUG"
+                member = f"; member={item['member_display_name']}" if item["member_display_name"] else ""
+                print(f"{item['report_code']} {item['display_name']}: {category}{member}; fights={item['attended']}/{item['total_fights']}; attendance={item['attendance_percentage']:.2f}%")
+            print(f"Matched guild characters: {result['matched']}; unmatched/PUG participants: {result['unmatched']}")
+            return
+    except (roster.RosterError, sqlite3.IntegrityError, OSError) as exc:
+        print(f"{args.command} failed: {exc}", file=sys.stderr)
+        raise SystemExit(1) from None
     {"update": update, "doctor": doctor, "upload": make_upload_zip}[args.command](config)
 
 
